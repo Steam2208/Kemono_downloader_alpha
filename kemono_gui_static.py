@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KemonoDownloader GUI v2.3 - Images Fixed - Версия без fake-useragent для exe
+KemonoDownloader GUI v2.3 - Images Fixed - Версия без fa    def run(self):
+        try:
+            self.log.emit("🚀 Начинаем скачивание с поддержкой резюме...")
+            
+            # Извлекаем информацию об авторе
+            service, creator_id = self.extract_creator_info(self.creator_url)
+            if not service or not creator_id:
+                self.log.emit("❌ Неверный формат URL!")
+                self.finished.emit(0)
+                returnnt для exe
 Улучшения v2.3:
 - Исправлена работа с MP4 и видео файлами
 - Автопоиск файлов на разных доменах (n1-n6.kemono.cr)
@@ -23,9 +32,13 @@ from PyQt6.QtGui import QFont, QIcon
 
 # Импорт нашего улучшенного движка без fake-useragent (с автопоиском доменов)
 sys.path.append(os.path.dirname(__file__))
-from downloader_static import get_creator_posts, get_post_media, download_file
+from downloader_static import (get_creator_posts, get_post_media, download_file, 
+                              load_download_progress, save_download_progress, 
+                              download_creator_posts, show_download_status)
 import requests
 import urllib3
+import hashlib
+from datetime import datetime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -129,6 +142,19 @@ class DownloaderWorker(QThread):
             os.makedirs(save_dir, exist_ok=True)
             self.log.emit(f"📁 Папка: {save_dir}")
             
+            # Загружаем прогресс загрузки
+            progress_data = load_download_progress(save_dir)
+            
+            if not progress_data.get('started_at'):
+                progress_data['started_at'] = datetime.now().isoformat()
+                self.log.emit("🆕 Новая загрузка автора")
+            else:
+                completed_posts = len(progress_data.get('completed_posts', []))
+                completed_files = len(progress_data.get('completed_files', {}))
+                self.log.emit(f"🔄 Продолжаем загрузку автора")
+                self.log.emit(f"   Уже обработано постов: {completed_posts}")
+                self.log.emit(f"   Уже скачано файлов: {completed_files}")
+            
             # Получаем все посты автора
             self.log.emit("🔍 Получаем список постов...")
             all_posts = get_creator_posts(self.creator_url)
@@ -146,21 +172,38 @@ class DownloaderWorker(QThread):
                 posts = all_posts
                 self.log.emit(f"🎯 Обрабатываем ВСЕ {len(posts)} постов")
             
-            # Пачковая загрузка
+            # Фильтруем уже обработанные посты
+            completed_post_ids = progress_data.get('completed_posts', [])
+            pending_posts = []
+            
+            for post_url in posts:
+                post_id = hashlib.md5(post_url.encode()).hexdigest()
+                if post_id not in completed_post_ids:
+                    pending_posts.append(post_url)
+            
+            if not pending_posts:
+                self.log.emit("✅ Все посты уже обработаны!")
+                completed_files = len(progress_data.get('completed_files', {}))
+                self.finished.emit(completed_files)
+                return
+            
+            self.log.emit(f"📋 К обработке: {len(pending_posts)} новых постов (из {len(posts)} общих)")
+            
+            # Пачковая загрузка только для новых постов
             batch_size = self.settings['batch_size']
             batch_pause = self.settings['batch_pause']
-            total_batches = (len(posts) + batch_size - 1) // batch_size
-            total_downloaded = 0
+            total_batches = (len(pending_posts) + batch_size - 1) // batch_size
+            total_downloaded = len(progress_data.get('completed_files', {}))  # Уже скачанные файлы
             
-            self.log.emit(f"📦 Пачек: {total_batches} по {batch_size} постов")
+            self.log.emit(f"📦 Пачек для обработки: {total_batches} по {batch_size} постов")
             
             for batch_num in range(total_batches):
                 if not self.running:
                     break
                     
                 start_idx = batch_num * batch_size
-                end_idx = min(start_idx + batch_size, len(posts))
-                batch_posts = posts[start_idx:end_idx]
+                end_idx = min(start_idx + batch_size, len(pending_posts))
+                batch_posts = pending_posts[start_idx:end_idx]
                 
                 self.batch_progress.emit(batch_num + 1, total_batches)
                 self.log.emit(f"\n📦 ПАЧКА {batch_num + 1}/{total_batches} (посты {start_idx + 1}-{end_idx})")
@@ -172,15 +215,21 @@ class DownloaderWorker(QThread):
                         break
                         
                     global_idx = start_idx + i
-                    self.progress.emit(global_idx, len(posts))
+                    self.progress.emit(global_idx, len(pending_posts))
                     
                     try:
+                        # Создаем ID поста для отслеживания
+                        post_id = hashlib.md5(post_url.encode()).hexdigest()
+                        
+                        self.log.emit(f"  📄 [{global_idx + 1}/{len(pending_posts)}] Обрабатываем пост...")
+                        
                         # Используем рабочий метод получения медиа
                         media_links = get_post_media(post_url, enhanced_search=True)
                         
                         if media_links:
-                            self.log.emit(f"  📄 [{global_idx + 1}/{len(posts)}] Найдено {len(media_links)} файлов")
+                            self.log.emit(f"      Найдено {len(media_links)} файлов")
                             
+                            post_files_downloaded = 0
                             for j, link in enumerate(media_links):
                                 if not self.running:
                                     break
@@ -191,18 +240,33 @@ class DownloaderWorker(QThread):
                                 else:
                                     filename = link.split('/')[-1].split('?')[0]
                                 
-                                # Скачиваем файл прямо в папку автора
-                                success = download_file(link, save_dir)
+                                # Скачиваем файл с поддержкой прогресса
+                                success = download_file(link, save_dir, progress_data)
                                 if success:
                                     total_downloaded += 1
                                     batch_downloaded += 1
-                                    self.log.emit(f"    ✅ {filename}")
+                                    post_files_downloaded += 1
+                                    self.log.emit(f"      ✅ {filename}")
                                 else:
-                                    self.log.emit(f"    ❌ Ошибка: {filename}")
+                                    self.log.emit(f"      ❌ Ошибка: {filename}")
                                 
                                 time.sleep(0.1)  # Небольшая пауза между файлами
+                            
+                            # Отмечаем пост как завершенный
+                            if 'completed_posts' not in progress_data:
+                                progress_data['completed_posts'] = []
+                            
+                            progress_data['completed_posts'].append(post_id)
+                            save_download_progress(save_dir, progress_data)
+                            
+                            self.log.emit(f"      📄 Пост завершен: {post_files_downloaded} файлов")
                         else:
-                            self.log.emit(f"  📄 [{global_idx + 1}/{len(posts)}] Медиа не найдено")
+                            self.log.emit(f"      ⚠️ Медиа не найдено")
+                            # Все равно отмечаем как обработанный
+                            if 'completed_posts' not in progress_data:
+                                progress_data['completed_posts'] = []
+                            progress_data['completed_posts'].append(post_id)
+                            save_download_progress(save_dir, progress_data)
                             
                     except Exception as e:
                         self.log.emit(f"  ❌ Ошибка поста {global_idx + 1}: {e}")
@@ -330,6 +394,11 @@ class KemonoDownloaderGUI(QMainWindow):
         self.open_folder_btn.clicked.connect(self.open_download_folder)
         self.open_folder_btn.setProperty("class", "primary")
         buttons_layout.addWidget(self.open_folder_btn)
+        
+        self.status_btn = QPushButton("📊 Статус загрузки")
+        self.status_btn.clicked.connect(self.show_download_status)
+        self.status_btn.setProperty("class", "info")
+        buttons_layout.addWidget(self.status_btn)
         
         layout.addLayout(buttons_layout)
         
@@ -608,6 +677,14 @@ class KemonoDownloaderGUI(QMainWindow):
         QPushButton[class="primary"]:hover {
             background-color: #1976d2;
         }
+        
+        QPushButton[class="info"] {
+            background-color: #0288d1;
+            border-color: #03a9f4;
+        }
+        QPushButton[class="info"]:hover {
+            background-color: #0277bd;
+        }
         """
     
     def get_light_theme_style(self):
@@ -778,6 +855,15 @@ class KemonoDownloaderGUI(QMainWindow):
         QPushButton[class="primary"]:hover {
             background-color: #0b7dda;
         }
+        
+        QPushButton[class="info"] {
+            background-color: #03a9f4;
+            border-color: #03a9f4;
+            color: #ffffff;
+        }
+        QPushButton[class="info"]:hover {
+            background-color: #0288d1;
+        }
         """
     
     def open_download_folder(self):
@@ -795,6 +881,67 @@ class KemonoDownloaderGUI(QMainWindow):
                 subprocess.call(["xdg-open", download_dir])
         else:
             QMessageBox.warning(self, "Ошибка", "Папка загрузок не существует!")
+    
+    def show_download_status(self):
+        """Показывает статус загрузки в текущей папке"""
+        download_dir = self.download_dir_input.text()
+        
+        if not os.path.exists(download_dir):
+            QMessageBox.warning(self, "Ошибка", "Папка загрузок не существует!")
+            return
+        
+        # Ищем все подпапки с файлами прогресса
+        status_info = []
+        
+        for root, dirs, files in os.walk(download_dir):
+            if '.kemono_progress.json' in files:
+                try:
+                    progress_file = os.path.join(root, '.kemono_progress.json')
+                    with open(progress_file, 'r', encoding='utf-8') as f:
+                        progress_data = json.load(f)
+                    
+                    relative_path = os.path.relpath(root, download_dir)
+                    completed_posts = len(progress_data.get('completed_posts', []))
+                    completed_files = len(progress_data.get('completed_files', {}))
+                    started_at = progress_data.get('started_at', 'Неизвестно')
+                    
+                    # Подсчитываем общий размер скачанных файлов
+                    total_size = 0
+                    for file_info in progress_data.get('completed_files', {}).values():
+                        total_size += file_info.get('size', 0)
+                    
+                    size_mb = total_size / (1024 * 1024)
+                    
+                    status_info.append({
+                        'path': relative_path,
+                        'posts': completed_posts,
+                        'files': completed_files,
+                        'size_mb': size_mb,
+                        'started': started_at[:19] if started_at != 'Неизвестно' else started_at
+                    })
+                except Exception as e:
+                    continue
+        
+        if not status_info:
+            QMessageBox.information(self, "Статус", "В папке загрузок не найдено активных или завершенных загрузок.")
+            return
+        
+        # Формируем сообщение со статусом
+        message = "📊 СТАТУС ЗАГРУЗОК\n" + "="*50 + "\n\n"
+        
+        for info in status_info:
+            message += f"📁 {info['path']}\n"
+            message += f"   📄 Постов: {info['posts']}\n"
+            message += f"   📁 Файлов: {info['files']}\n"
+            message += f"   💾 Размер: {info['size_mb']:.1f} MB\n"
+            message += f"   📅 Начато: {info['started']}\n\n"
+        
+        # Показываем в диалоге
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("📊 Статус загрузок")
+        msg_box.setText(message)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.exec()
     
     def start_download(self):
         url = self.url_input.text().strip()

@@ -5,6 +5,8 @@ import json
 import urllib3
 import re
 import urllib.parse
+import hashlib
+from datetime import datetime
 
 # Отключаем предупреждения SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -337,8 +339,54 @@ def get_post_media(post_url, enhanced_search=True):
         print(f"  🔄 Переключаемся на HTML парсинг...")
         return get_post_media_from_html_fallback(post_url)
 
-def download_file(url, save_dir):
-    """Скачивает файл по URL"""
+def is_file_complete(filepath, expected_size=None):
+    """Проверяет, что файл скачан полностью"""
+    if not os.path.exists(filepath):
+        return False
+    
+    file_size = os.path.getsize(filepath)
+    
+    # Файл считается неполным если он меньше 1KB (может быть обрезан)
+    if file_size < 1024:
+        return False
+    
+    # Если знаем ожидаемый размер, проверяем соответствие
+    if expected_size and file_size != expected_size:
+        return False
+    
+    return True
+
+def get_download_progress_file(save_dir):
+    """Возвращает путь к файлу прогресса загрузки"""
+    return os.path.join(save_dir, '.kemono_progress.json')
+
+def load_download_progress(save_dir):
+    """Загружает прогресс загрузки из JSON файла"""
+    progress_file = get_download_progress_file(save_dir)
+    
+    if not os.path.exists(progress_file):
+        return {'completed_posts': [], 'completed_files': {}, 'started_at': None, 'last_update': None}
+    
+    try:
+        with open(progress_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки прогресса: {e}")
+        return {'completed_posts': [], 'completed_files': {}, 'started_at': None, 'last_update': None}
+
+def save_download_progress(save_dir, progress):
+    """Сохраняет прогресс загрузки в JSON файл"""
+    progress_file = get_download_progress_file(save_dir)
+    progress['last_update'] = datetime.now().isoformat()
+    
+    try:
+        with open(progress_file, 'w', encoding='utf-8') as f:
+            json.dump(progress, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"⚠️ Ошибка сохранения прогресса: {e}")
+
+def download_file(url, save_dir, progress_data=None):
+    """Скачивает файл по URL с поддержкой резюме"""
     try:
         # Создаем папку если не существует
         if not os.path.exists(save_dir):
@@ -357,10 +405,29 @@ def download_file(url, save_dir):
         
         filepath = os.path.join(save_dir, safe_filename)
         
-        # Проверяем существование файла
+        # Создаем уникальный ID файла для отслеживания
+        file_id = hashlib.md5(url.encode()).hexdigest()
+        
+        # Проверяем существование и полноту файла
         if os.path.exists(filepath):
-            print(f"✅ Скачано: {safe_filename}")
-            return True
+            if is_file_complete(filepath):
+                print(f"✅ Уже скачано: {safe_filename}")
+                
+                # Обновляем прогресс
+                if progress_data:
+                    progress_data['completed_files'][file_id] = {
+                        'url': url,
+                        'filename': safe_filename,
+                        'filepath': filepath,
+                        'size': os.path.getsize(filepath),
+                        'completed_at': datetime.now().isoformat()
+                    }
+                    save_download_progress(save_dir, progress_data)
+                
+                return True
+            else:
+                print(f"⚠️ Файл поврежден, перекачиваем: {safe_filename}")
+                os.remove(filepath)
         
         # Пробуем скачать с оригинального URL
         response = requests.get(url, headers=HEADERS, verify=False, timeout=30, stream=True)
@@ -372,8 +439,27 @@ def download_file(url, save_dir):
                         f.write(chunk)
             
             file_size = os.path.getsize(filepath)
-            print(f"    ✅ Скачано: {safe_filename} ({file_size} байт)")
-            return True
+            
+            # Проверяем что файл скачался полностью
+            if is_file_complete(filepath):
+                print(f"    ✅ Скачано: {safe_filename} ({file_size} байт)")
+                
+                # Обновляем прогресс
+                if progress_data:
+                    progress_data['completed_files'][file_id] = {
+                        'url': url,
+                        'filename': safe_filename,
+                        'filepath': filepath,
+                        'size': file_size,
+                        'completed_at': datetime.now().isoformat()
+                    }
+                    save_download_progress(save_dir, progress_data)
+                
+                return True
+            else:
+                print(f"    ❌ Файл скачался неполностью: {safe_filename}")
+                os.remove(filepath)  # Удаляем поврежденный файл
+                return False
         
         # Если оригинальный не работает, пробуем другие домены
         print(f"    ⚠️ Оригинал недоступен ({response.status_code}), ищем на других доменах...")
@@ -405,8 +491,27 @@ def download_file(url, save_dir):
                                         f.write(chunk)
                             
                             file_size = os.path.getsize(filepath)
-                            print(f"    ✅ Найдено на {domain}: {safe_filename} ({file_size} байт)")
-                            return True
+                            
+                            # Проверяем целостность
+                            if is_file_complete(filepath):
+                                print(f"    ✅ Найдено на {domain}: {safe_filename} ({file_size} байт)")
+                                
+                                # Обновляем прогресс
+                                if progress_data:
+                                    progress_data['completed_files'][file_id] = {
+                                        'url': url,
+                                        'filename': safe_filename,
+                                        'filepath': filepath,
+                                        'size': file_size,
+                                        'completed_at': datetime.now().isoformat(),
+                                        'domain': domain
+                                    }
+                                    save_download_progress(save_dir, progress_data)
+                                
+                                return True
+                            else:
+                                print(f"    ❌ Файл поврежден на {domain}: {safe_filename}")
+                                os.remove(filepath)
                 
                 except Exception:
                     continue
@@ -555,6 +660,159 @@ def get_post_media_from_html_fallback(post_url):
 # КОНСОЛЬНЫЙ ИНТЕРФЕЙС
 # =====================================
 
+def download_post_media(post_url, save_dir, progress_data=None):
+    """Скачивает медиа из одного поста с поддержкой резюме"""
+    try:
+        # Создаем ID поста для отслеживания
+        post_id = hashlib.md5(post_url.encode()).hexdigest()
+        
+        # Проверяем, был ли этот пост уже обработан
+        if progress_data and post_id in progress_data.get('completed_posts', []):
+            print(f"📄 Пост уже обработан ранее: {post_url}")
+            return True
+        
+        print(f"📄 Обрабатываем пост: {post_url}")
+        
+        # Получаем медиа файлы из поста
+        media_links = get_post_media(post_url, enhanced_search=True)
+        
+        if not media_links:
+            print(f"  ⚠️ Медиа не найдено в посте")
+            return False
+        
+        success_count = 0
+        total_count = len(media_links)
+        
+        print(f"  📁 Найдено файлов: {total_count}")
+        
+        for i, link in enumerate(media_links):
+            print(f"  [{i+1}/{total_count}] Скачиваем...")
+            
+            if download_file(link, save_dir, progress_data):
+                success_count += 1
+        
+        # Отмечаем пост как завершенный
+        if progress_data:
+            if 'completed_posts' not in progress_data:
+                progress_data['completed_posts'] = []
+            
+            progress_data['completed_posts'].append(post_id)
+            save_download_progress(save_dir, progress_data)
+        
+        print(f"  ✅ Пост завершен: {success_count}/{total_count} файлов")
+        return success_count > 0
+        
+    except Exception as e:
+        print(f"  ❌ Ошибка обработки поста: {e}")
+        return False
+
+def download_creator_posts(creator_url, save_dir, post_limit=None):
+    """Скачивает все посты автора с поддержкой резюме"""
+    try:
+        print("🚀 Начинаем скачивание автора с поддержкой резюме...")
+        
+        # Загружаем прогресс
+        progress_data = load_download_progress(save_dir)
+        
+        if not progress_data.get('started_at'):
+            progress_data['started_at'] = datetime.now().isoformat()
+            print("🆕 Новая загрузка автора")
+        else:
+            completed_posts = len(progress_data.get('completed_posts', []))
+            completed_files = len(progress_data.get('completed_files', {}))
+            print(f"🔄 Продолжаем загрузку автора")
+            print(f"   Уже обработано постов: {completed_posts}")
+            print(f"   Уже скачано файлов: {completed_files}")
+        
+        # Получаем все посты автора
+        print("🔍 Получаем список постов...")
+        all_posts = get_creator_posts(creator_url)
+        
+        if not all_posts:
+            print("❌ Посты не найдены!")
+            return False
+        
+        # Применяем лимит если указан
+        if post_limit and post_limit > 0:
+            posts = all_posts[:post_limit]
+            print(f"🎯 Ограничиваем до {len(posts)} постов из {len(all_posts)}")
+        else:
+            posts = all_posts
+            print(f"🎯 Обрабатываем ВСЕ {len(posts)} постов")
+        
+        # Фильтруем уже обработанные посты
+        completed_post_ids = progress_data.get('completed_posts', [])
+        pending_posts = []
+        
+        for post_url in posts:
+            post_id = hashlib.md5(post_url.encode()).hexdigest()
+            if post_id not in completed_post_ids:
+                pending_posts.append(post_url)
+        
+        if not pending_posts:
+            print("✅ Все посты уже обработаны!")
+            return True
+        
+        print(f"📋 К обработке: {len(pending_posts)} постов (из {len(posts)} общих)")
+        
+        total_downloaded = 0
+        
+        for i, post_url in enumerate(pending_posts):
+            print(f"\n📄 [{i+1}/{len(pending_posts)}] Обрабатываем пост...")
+            
+            if download_post_media(post_url, save_dir, progress_data):
+                print(f"  ✅ Пост {i+1} завершен")
+            else:
+                print(f"  ⚠️ Пост {i+1} пропущен")
+            
+            # Небольшая пауза между постами
+            if i < len(pending_posts) - 1:
+                import time
+                time.sleep(1)
+        
+        # Финальная статистика
+        final_completed_posts = len(progress_data.get('completed_posts', []))
+        final_completed_files = len(progress_data.get('completed_files', {}))
+        
+        print(f"\n🎉 ЗАГРУЗКА АВТОРА ЗАВЕРШЕНА!")
+        print(f"   Обработано постов: {final_completed_posts}")
+        print(f"   Скачано файлов: {final_completed_files}")
+        print(f"📁 Все файлы в: {save_dir}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Критическая ошибка загрузки автора: {e}")
+        return False
+
+def show_download_status(save_dir):
+    """Показывает статус текущей загрузки"""
+    progress_data = load_download_progress(save_dir)
+    
+    if not progress_data.get('started_at'):
+        print("📋 Загрузки в этой папке не найдены")
+        return
+    
+    completed_posts = len(progress_data.get('completed_posts', []))
+    completed_files = len(progress_data.get('completed_files', {}))
+    started_at = progress_data.get('started_at', 'Неизвестно')
+    last_update = progress_data.get('last_update', 'Неизвестно')
+    
+    print("📊 СТАТУС ЗАГРУЗКИ")
+    print("="*50)
+    print(f"📅 Начата: {started_at}")
+    print(f"🔄 Последнее обновление: {last_update}")
+    print(f"📄 Обработано постов: {completed_posts}")
+    print(f"📁 Скачано файлов: {completed_files}")
+    
+    if completed_files > 0:
+        print(f"\n📋 Последние скачанные файлы:")
+        files = list(progress_data.get('completed_files', {}).values())
+        for file_info in files[-5:]:  # Показываем последние 5
+            filename = file_info.get('filename', 'unknown')
+            size_mb = file_info.get('size', 0) / (1024 * 1024)
+            print(f"  • {filename} ({size_mb:.1f} MB)")
+
 def console_interface():
     """Консольный интерфейс для программы"""
     print("🦊 KemonoDownloader v2.3 Final - Console Edition")
@@ -563,27 +821,49 @@ def console_interface():
     print("🎬 Видео: MP4, MOV, AVI, MKV, WEBM")
     print("🖼️ Изображения: PNG, JPG, JPEG, GIF")
     print("📦 Архивы: ZIP, RAR")
+    print("🔄 Автоматическое продолжение после краша")
     print("="*50)
     
     while True:
         try:
-            print("\n🔗 Введите ссылку на:")
-            print("   • Автора: https://kemono.cr/patreon/user/12345")
-            print("   • Пост: https://kemono.cr/patreon/user/12345/post/67890")
-            print("   • Или 'exit' для выхода")
+            print("\n🔗 Введите команду:")
+            print("   • Ссылку на автора: https://kemono.cr/patreon/user/12345")
+            print("   • Ссылку на пост: https://kemono.cr/patreon/user/12345/post/67890")
+            print("   • 'status' - проверить статус загрузки в папке")
+            print("   • 'exit' - выход")
             
-            url = input("\n👉 Ссылка: ").strip()
+            command = input("\n👉 Команда: ").strip()
             
-            if url.lower() in ['exit', 'quit', 'выход', 'q']:
+            if command.lower() in ['exit', 'quit', 'выход', 'q']:
                 print("👋 До свидания!")
                 break
             
-            if not url:
-                print("❌ Ссылка не может быть пустой!")
+            if command.lower() == 'status':
+                print(f"\n📁 Где проверить статус?")
+                print("   • Введите путь к папке загрузок")
+                print("   • Или нажмите Enter для текущей папки")
+                
+                status_folder = input("👉 Папка: ").strip()
+                if not status_folder:
+                    status_folder = "downloads"
+                
+                if os.path.exists(status_folder):
+                    show_download_status(status_folder)
+                else:
+                    print("❌ Папка не найдена!")
+                
+                print("\n" + "="*50)
+                input("📌 Нажмите Enter для продолжения...")
                 continue
             
+            if not command:
+                print("❌ Команда не может быть пустой!")
+                continue
+            
+            # Обрабатываем как URL
+            url = command
             if 'kemono.cr' not in url:
-                print("❌ Поддерживаются только ссылки kemono.cr!")
+                print("❌ Поддерживаются только ссылки kemono.cr или команды!")
                 continue
             
             print(f"\n📁 Где сохранить файлы?")
