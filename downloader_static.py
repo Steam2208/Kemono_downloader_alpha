@@ -550,3 +550,87 @@ def get_post_media_from_html_fallback(post_url):
     except Exception as e:
         print(f"  ❌ Ошибка HTML парсинга: {e}")
         return []
+
+# =====================================
+# КОНСОЛЬНЫЙ ИНТЕРФЕЙС
+# =====================================
+
+def console_interface():
+    """Консольный интерфейс для программы"""
+    print("🦊 KemonoDownloader v2.3 Final - Console Edition")
+    print("="*50)
+    print("Поддерживаемые форматы:")
+    print("🎬 Видео: MP4, MOV, AVI, MKV, WEBM")
+    print("🖼️ Изображения: PNG, JPG, JPEG, GIF")
+    print("📦 Архивы: ZIP, RAR")
+    print("="*50)
+    
+    while True:
+        try:
+            print("\n🔗 Введите ссылку на:")
+            print("   • Автора: https://kemono.cr/patreon/user/12345")
+            print("   • Пост: https://kemono.cr/patreon/user/12345/post/67890")
+            print("   • Или 'exit' для выхода")
+            
+            url = input("\n👉 Ссылка: ").strip()
+            
+            if url.lower() in ['exit', 'quit', 'выход', 'q']:
+                print("👋 До свидания!")
+                break
+            
+            if not url:
+                print("❌ Ссылка не может быть пустой!")
+                continue
+            
+            if 'kemono.cr' not in url:
+                print("❌ Поддерживаются только ссылки kemono.cr!")
+                continue
+            
+            print(f"\n📁 Где сохранить файлы?")
+            print("   • Введите путь к папке")
+            print("   • Или нажмите Enter для текущей папки")
+            
+            download_folder = input("👉 Папка: ").strip()
+            
+            if not download_folder:
+                download_folder = "downloads"
+            
+            # Создаем папку если её нет
+            import os
+            if not os.path.exists(download_folder):
+                os.makedirs(download_folder)
+                print(f"📁 Создана папка: {download_folder}")
+            
+            print(f"\n🚀 Начинаем загрузку...")
+            print(f"🔗 URL: {url}")
+            print(f"📁 Папка: {download_folder}")
+            print("="*50)
+            
+            # Определяем тип ссылки и запускаем загрузку
+            if '/post/' in url:
+                print("📄 Обнаружен пост, загружаем...")
+                success = download_post_media(url, download_folder)
+                if success:
+                    print(f"\n✅ Пост успешно загружен в: {download_folder}")
+                else:
+                    print(f"\n❌ Не удалось загрузить пост")
+            else:
+                print("👤 Обнаружен автор, загружаем все посты...")
+                success = download_creator_posts(url, download_folder)
+                if success:
+                    print(f"\n✅ Автор успешно загружен в: {download_folder}")
+                else:
+                    print(f"\n❌ Не удалось загрузить автора")
+            
+            print("\n" + "="*50)
+            input("📌 Нажмите Enter для продолжения...")
+            
+        except KeyboardInterrupt:
+            print("\n\n👋 Программа остановлена пользователем. До свидания!")
+            break
+        except Exception as e:
+            print(f"\n❌ Произошла ошибка: {e}")
+            input("📌 Нажмите Enter для продолжения...")
+
+if __name__ == "__main__":
+    console_interface()
