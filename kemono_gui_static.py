@@ -44,7 +44,6 @@ class DownloaderWorker(QThread):
     progress = pyqtSignal(int, int)  # текущий, всего
     log = pyqtSignal(str)
     finished = pyqtSignal(int)  # количество скачанных файлов
-    batch_progress = pyqtSignal(int, int)  # текущая пачка, всего пачек
     
     def __init__(self, creator_url, settings):
         super().__init__()
@@ -186,94 +185,69 @@ class DownloaderWorker(QThread):
             
             self.log.emit(f"📋 К обработке: {len(pending_posts)} новых постов (из {len(posts)} общих)")
             
-            # Пачковая загрузка только для новых постов
-            batch_size = self.settings['batch_size']
-            batch_pause = self.settings['batch_pause']
-            total_batches = (len(pending_posts) + batch_size - 1) // batch_size
+            # Многопоточная обработка постов
             total_downloaded = len(progress_data.get('completed_files', {}))  # Уже скачанные файлы
             
-            self.log.emit(f"📦 Пачек для обработки: {total_batches} по {batch_size} постов")
+            self.log.emit(f"� Начинаем многопоточную обработку {len(pending_posts)} постов")
             
-            for batch_num in range(total_batches):
+            for i, post_url in enumerate(pending_posts):
                 if not self.running:
                     break
                     
-                start_idx = batch_num * batch_size
-                end_idx = min(start_idx + batch_size, len(pending_posts))
-                batch_posts = pending_posts[start_idx:end_idx]
-                
-                self.batch_progress.emit(batch_num + 1, total_batches)
-                self.log.emit(f"\n📦 ПАЧКА {batch_num + 1}/{total_batches} (посты {start_idx + 1}-{end_idx})")
-                
-                batch_downloaded = 0
-                
-                for i, post_url in enumerate(batch_posts):
-                    if not self.running:
-                        break
-                        
-                    global_idx = start_idx + i
-                    self.progress.emit(global_idx, len(pending_posts))
+                self.progress.emit(i, len(pending_posts))
                     
-                    try:
-                        # Создаем ID поста для отслеживания
-                        post_id = hashlib.md5(post_url.encode()).hexdigest()
+                try:
+                    # Создаем ID поста для отслеживания
+                    post_id = hashlib.md5(post_url.encode()).hexdigest()
+                    
+                    self.log.emit(f"📄 [{i + 1}/{len(pending_posts)}] Обрабатываем пост...")
+                    
+                    # Используем рабочий метод получения медиа
+                    media_links = get_post_media(post_url, enhanced_search=True)
+                    
+                    if media_links:
+                        self.log.emit(f"   Найдено {len(media_links)} файлов")
                         
-                        self.log.emit(f"  📄 [{global_idx + 1}/{len(pending_posts)}] Обрабатываем пост...")
-                        
-                        # Используем рабочий метод получения медиа
-                        media_links = get_post_media(post_url, enhanced_search=True)
-                        
-                        if media_links:
-                            self.log.emit(f"      Найдено {len(media_links)} файлов")
-                            
-                            post_files_downloaded = 0
-                            for j, link in enumerate(media_links):
-                                if not self.running:
-                                    break
-                                    
-                                # Получаем имя файла
-                                if '?f=' in link:
-                                    filename = link.split('?f=')[-1]
-                                else:
-                                    filename = link.split('/')[-1].split('?')[0]
+                        post_files_downloaded = 0
+                        for j, link in enumerate(media_links):
+                            if not self.running:
+                                break
                                 
-                                # Скачиваем файл с поддержкой прогресса
-                                success = download_file(link, save_dir, progress_data)
-                                if success:
-                                    total_downloaded += 1
-                                    batch_downloaded += 1
-                                    post_files_downloaded += 1
-                                    self.log.emit(f"      ✅ {filename}")
-                                else:
-                                    self.log.emit(f"      ❌ Ошибка: {filename}")
-                                
-                                time.sleep(0.1)  # Небольшая пауза между файлами
+                            # Получаем имя файла
+                            if '?f=' in link:
+                                filename = link.split('?f=')[-1]
+                            else:
+                                filename = link.split('/')[-1].split('?')[0]
                             
-                            # Отмечаем пост как завершенный
-                            if 'completed_posts' not in progress_data:
-                                progress_data['completed_posts'] = []
+                            # Скачиваем файл с поддержкой прогресса
+                            success = download_file(link, save_dir, progress_data)
+                            if success:
+                                total_downloaded += 1
+                                post_files_downloaded += 1
+                                self.log.emit(f"   ✅ {filename}")
+                            else:
+                                self.log.emit(f"   ❌ Ошибка: {filename}")
                             
-                            progress_data['completed_posts'].append(post_id)
-                            save_download_progress(save_dir, progress_data)
-                            
-                            self.log.emit(f"      📄 Пост завершен: {post_files_downloaded} файлов")
-                        else:
-                            self.log.emit(f"      ⚠️ Медиа не найдено")
-                            # Все равно отмечаем как обработанный
-                            if 'completed_posts' not in progress_data:
-                                progress_data['completed_posts'] = []
-                            progress_data['completed_posts'].append(post_id)
-                            save_download_progress(save_dir, progress_data)
-                            
-                    except Exception as e:
-                        self.log.emit(f"  ❌ Ошибка поста {global_idx + 1}: {e}")
-                
-                self.log.emit(f"✅ Пачка {batch_num + 1} завершена: {batch_downloaded} файлов")
-                
-                # Пауза между пачками
-                if batch_num < total_batches - 1 and self.running:
-                    self.log.emit(f"⏸️ Пауза {batch_pause}с...")
-                    time.sleep(batch_pause)
+                            time.sleep(0.1)  # Небольшая пауза между файлами
+                        
+                        # Отмечаем пост как завершенный
+                        if 'completed_posts' not in progress_data:
+                            progress_data['completed_posts'] = []
+                        
+                        progress_data['completed_posts'].append(post_id)
+                        save_download_progress(save_dir, progress_data)
+                        
+                        self.log.emit(f"   📄 Пост завершен: {post_files_downloaded} файлов")
+                    else:
+                        self.log.emit(f"   ⚠️ Медиа не найдено")
+                        # Все равно отмечаем как обработанный
+                        if 'completed_posts' not in progress_data:
+                            progress_data['completed_posts'] = []
+                        progress_data['completed_posts'].append(post_id)
+                        save_download_progress(save_dir, progress_data)
+                        
+                except Exception as e:
+                    self.log.emit(f"❌ Ошибка поста {i + 1}: {e}")
             
             if self.running:
                 self.log.emit(f"\n🎉 ЗАВЕРШЕНО! Скачано {total_downloaded} файлов")
@@ -338,38 +312,21 @@ class KemonoDownloaderGUI(QMainWindow):
         self.browse_btn.clicked.connect(self.browse_directory)
         settings_layout.addWidget(self.browse_btn, 0, 2)
         
-        # Размер пачки
-        settings_layout.addWidget(QLabel("📦 Размер пачки:"), 1, 0)
-        self.batch_size_input = QSpinBox()
-        self.batch_size_input.setRange(1, 50)
-        self.batch_size_input.setValue(5)
-        self.batch_size_input.valueChanged.connect(self.save_settings)
-        settings_layout.addWidget(self.batch_size_input, 1, 1)
-        
-        # Пауза между пачками
-        settings_layout.addWidget(QLabel("⏱️ Пауза между пачками (сек):"), 2, 0)
-        self.batch_pause_input = QDoubleSpinBox()
-        self.batch_pause_input.setRange(0.1, 60.0)
-        self.batch_pause_input.setValue(2.0)
-        self.batch_pause_input.setSingleStep(0.5)
-        self.batch_pause_input.valueChanged.connect(self.save_settings)
-        settings_layout.addWidget(self.batch_pause_input, 2, 1)
-        
         # Лимит постов
-        settings_layout.addWidget(QLabel("🎯 Лимит постов (0 = все):"), 3, 0)
+        settings_layout.addWidget(QLabel("🎯 Лимит постов (0 = все):"), 1, 0)
         self.post_limit_input = QSpinBox()
         self.post_limit_input.setRange(0, 10000)
         self.post_limit_input.setValue(0)
         self.post_limit_input.setSpecialValueText("Все посты")
         self.post_limit_input.valueChanged.connect(self.save_settings)
-        settings_layout.addWidget(self.post_limit_input, 3, 1)
+        settings_layout.addWidget(self.post_limit_input, 1, 1)
         
         # Темная тема
-        settings_layout.addWidget(QLabel("🌙 Темная тема:"), 4, 0)
+        settings_layout.addWidget(QLabel("🌙 Темная тема:"), 2, 0)
         self.dark_theme_checkbox = QCheckBox("Включено")
         self.dark_theme_checkbox.setChecked(True)  # По умолчанию темная
         self.dark_theme_checkbox.stateChanged.connect(self.toggle_theme)
-        settings_layout.addWidget(self.dark_theme_checkbox, 4, 1)
+        settings_layout.addWidget(self.dark_theme_checkbox, 2, 1)
         
         layout.addWidget(settings_group)
         
@@ -415,13 +372,6 @@ class KemonoDownloaderGUI(QMainWindow):
         self.post_progress = QProgressBar()
         progress_layout.addWidget(self.post_progress)
         
-        # Прогресс пачек
-        self.batch_progress_label = QLabel("Пачки: 0 / 0")
-        progress_layout.addWidget(self.batch_progress_label)
-        
-        self.batch_progress = QProgressBar()
-        progress_layout.addWidget(self.batch_progress)
-        
         layout.addWidget(progress_group)
         
         # Лог
@@ -443,12 +393,6 @@ class KemonoDownloaderGUI(QMainWindow):
         self.download_dir_input.setText(
             self.settings.value("download_dir", os.path.join(os.getcwd(), "downloads"))
         )
-        self.batch_size_input.setValue(
-            int(self.settings.value("batch_size", 5))
-        )
-        self.batch_pause_input.setValue(
-            float(self.settings.value("batch_pause", 2.0))
-        )
         self.post_limit_input.setValue(
             int(self.settings.value("post_limit", 0))
         )
@@ -461,8 +405,6 @@ class KemonoDownloaderGUI(QMainWindow):
     def save_settings(self):
         """Сохраняет текущие настройки"""
         self.settings.setValue("download_dir", self.download_dir_input.text())
-        self.settings.setValue("batch_size", self.batch_size_input.value())
-        self.settings.setValue("batch_pause", self.batch_pause_input.value())
         self.settings.setValue("post_limit", self.post_limit_input.value())
         self.settings.setValue("dark_theme", self.dark_theme_checkbox.isChecked())
     
@@ -1008,15 +950,12 @@ class KemonoDownloaderGUI(QMainWindow):
         # Настройки
         settings = {
             'download_dir': download_dir,
-            'batch_size': self.batch_size_input.value(),
-            'batch_pause': self.batch_pause_input.value(),
             'post_limit': self.post_limit_input.value() if self.post_limit_input.value() > 0 else None
         }
         
         # Запускаем рабочий поток
         self.worker = DownloaderWorker(url, settings)
         self.worker.progress.connect(self.update_post_progress)
-        self.worker.batch_progress.connect(self.update_batch_progress)
         self.worker.log.connect(self.add_log)
         self.worker.finished.connect(self.download_finished)
         
@@ -1038,11 +977,7 @@ class KemonoDownloaderGUI(QMainWindow):
         self.post_progress.setValue(current)
         self.post_progress_label.setText(f"Посты: {current} / {total}")
         
-    def update_batch_progress(self, current, total):
-        self.batch_progress.setMaximum(total)
-        self.batch_progress.setValue(current)
-        self.batch_progress_label.setText(f"Пачки: {current} / {total}")
-        
+
     def add_log(self, message):
         self.log_text.append(message)
         # Автоскролл вниз
