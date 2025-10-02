@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KemonoDownloader GUI v2.3 - Images Fixed - Версия без fa    def run(self):
-        try:
-            self.log.emit("🚀 Начинаем скачивание с поддержкой резюме...")
-            
-            # Извлекаем информацию об авторе
-            service, creator_id = self.extract_creator_info(self.creator_url)
-            if not service or not creator_id:
-                self.log.emit("❌ Неверный формат URL!")
-                self.finished.emit(0)
-                returnnt для exe
-Улучшения v2.3:
-- Исправлена работа с MP4 и видео файлами
-- Автопоиск файлов на разных доменах (n1-n6.kemono.cr)
-- HTML fallback при проблемах с API
-- Улучшенный поиск медиа во всех секциях
+KemonoDownloader GUI v2.6 Cloud Auto - Универсальный поиск + автоскачивание облаков
+Новое в v2.6:
+- УНИВЕРСАЛЬНЫЙ поиск ВСЕХ типов файлов (61 формат)
+- АВТОМАТИЧЕСКОЕ СКАЧИВАНИЕ ИЗ ОБЛАЧНЫХ ХРАНИЛИЩ!
+- Поддержка Google Drive, MEGA, Dropbox, MediaFire
+- Поддержка 3D моделей: GLB, GLTF, BLEND, FBX, OBJ
+- Расширенный поиск архивов, документов, аудио
+- Unity ресурсы: UNITY, UNITYPACKAGE, PREFAB
+- Текстуры и материалы: DDS, HDR, EXR, MAT
+- Автоматическое определение типов файлов
+- Облачные файлы сохраняются в папку cloud_files/
+- Улучшенная статистика скачивания
 """
 
 import sys
@@ -299,7 +296,7 @@ class KemonoDownloaderGUI(QMainWindow):
         self.load_settings()
         
     def init_ui(self):
-        self.setWindowTitle("🦊 KemonoDownloader GUI v2.3 - Images Fixed")
+        self.setWindowTitle("🦊 KemonoDownloader GUI v2.6 Cloud Auto")
         self.setGeometry(100, 100, 800, 700)
         
         # Центральный виджет
@@ -308,7 +305,7 @@ class KemonoDownloaderGUI(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # Заголовок
-        title = QLabel("🦊 KemonoDownloader GUI v2.3 - Images Fixed")
+        title = QLabel("🦊 KemonoDownloader GUI v2.6 Cloud Auto")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = QFont()
         title_font.setPointSize(18)
@@ -399,6 +396,11 @@ class KemonoDownloaderGUI(QMainWindow):
         self.status_btn.clicked.connect(self.show_download_status)
         self.status_btn.setProperty("class", "info")
         buttons_layout.addWidget(self.status_btn)
+        
+        self.formats_btn = QPushButton("📋 Форматы файлов")
+        self.formats_btn.clicked.connect(self.show_supported_formats)
+        self.formats_btn.setProperty("class", "primary")
+        buttons_layout.addWidget(self.formats_btn)
         
         layout.addLayout(buttons_layout)
         
@@ -943,6 +945,56 @@ class KemonoDownloaderGUI(QMainWindow):
         msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg_box.exec()
     
+    def show_supported_formats(self):
+        """Показывает список поддерживаемых форматов файлов"""
+        message = """🎯 УНИВЕРСАЛЬНЫЙ ПОИСК ВСЕХ ФАЙЛОВ
+        
+🎭 3D МОДЕЛИ И BLENDER:
+• GLB, GLTF - 3D модели для веб и игр
+• BLEND - файлы Blender
+• FBX, OBJ, DAE - универсальные 3D форматы
+• 3DS, MAX, MA, MB - форматы 3D пакетов
+
+🎬 ВИДЕО:
+• MP4, MOV, AVI, MKV, WEBM
+• FLV, WMV, M4V, MPG, MPEG
+
+🖼️ ИЗОБРАЖЕНИЯ:
+• PNG, JPG, JPEG, GIF, BMP
+• TIFF, TGA, PSD, WEBP, SVG
+
+📦 АРХИВЫ:
+• ZIP, RAR, 7Z, TAR, GZ, BZ2, XZ
+
+📄 ДОКУМЕНТЫ:
+• PDF, DOC, DOCX, TXT, RTF
+
+🎵 АУДИО:
+• MP3, WAV, FLAC, OGG, M4A, AAC
+
+🎮 UNITY И ИГРЫ:
+• UNITY, UNITYPACKAGE, PREFAB, ASSET
+
+🎨 ТЕКСТУРЫ И МАТЕРИАЛЫ:
+• DDS, HDR, EXR, MAT
+
+📱 ПРИЛОЖЕНИЯ:
+• EXE, MSI, DMG, APK, IPA
+
+☁️ ОБЛАЧНЫЕ ССЫЛКИ:
+• Google Drive, MEGA, Dropbox
+• OneDrive, MediaFire, WeTransfer
+• pCloud, Yandex Disk, Box, iCloud
+• Ссылки сохраняются в cloud_links.txt
+
+✨ Программа автоматически найдет ВСЕ файлы и ссылки в постах!"""
+        
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("📋 Поддерживаемые форматы файлов")
+        msg_box.setText(message)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.exec()
+    
     def start_download(self):
         url = self.url_input.text().strip()
         if not url:
@@ -1020,7 +1072,7 @@ class KemonoDownloaderGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("KemonoDownloader GUI v2.3 - Images Fixed")
+    app.setApplicationName("KemonoDownloader GUI v2.6 Cloud Auto")
     
     # Создаем окно (тема будет применена в load_settings)
     window = KemonoDownloaderGUI()

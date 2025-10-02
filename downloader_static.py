@@ -6,7 +6,18 @@ import urllib3
 import re
 import urllib.parse
 import hashlib
+import time
 from datetime import datetime
+
+# Попытка импорта CloudDownloader для автоскачивания облачных файлов
+try:
+    from cloud_downloader import CloudDownloader
+    CLOUD_AUTO_ENABLED = True
+    print("✅ CloudDownloader загружен - автоскачивание облачных файлов включено")
+except ImportError:
+    CloudDownloader = None
+    CLOUD_AUTO_ENABLED = False
+    print("⚠️ cloud_downloader.py не найден - автоскачивание облачных файлов отключено")
 
 # Отключаем предупреждения SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -22,6 +33,229 @@ HEADERS = {
     "Accept-Encoding": "gzip, deflate",  
     "Connection": "keep-alive"
 }
+
+# Список всех поддерживаемых расширений файлов
+SUPPORTED_EXTENSIONS = {
+    # 3D модели и файлы Blender
+    '.glb', '.gltf', '.blend', '.fbx', '.obj', '.dae', '.3ds', '.max', '.ma', '.mb',
+    # Видео форматы
+    '.mp4', '.avi', '.mkv', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg',
+    # Изображения
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tga', '.psd', '.webp', '.svg',
+    # Архивы
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
+    # Документы
+    '.pdf', '.doc', '.docx', '.txt', '.rtf',
+    # Аудио
+    '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac',
+    # Другие форматы
+    '.exe', '.msi', '.dmg', '.apk', '.ipa',
+    # Unity и игровые ресурсы
+    '.unity', '.unitypackage', '.prefab', '.asset',
+    # Текстуры и материалы
+    '.dds', '.hdr', '.exr', '.mat'
+}
+
+def is_supported_file(filename):
+    """Проверяет, поддерживается ли файл по расширению"""
+    if not filename:
+        return False
+    
+    # Получаем расширение файла
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in SUPPORTED_EXTENSIONS or len(filename) > 3  # Поддерживаем все файлы с именем
+
+def detect_cloud_links(content):
+    """Обнаруживает ссылки на облачные сервисы в контенте"""
+    cloud_links = []
+    
+    # Паттерны для различных облачных сервисов
+    cloud_patterns = {
+        'Google Drive': [
+            r'https://drive\.google\.com/[^\s<>"]+',
+            r'https://docs\.google\.com/[^\s<>"]+',
+        ],
+        'MEGA': [
+            r'https://mega\.nz/[^\s<>"]+',
+            r'https://mega\.co\.nz/[^\s<>"]+',
+        ],
+        'Dropbox': [
+            r'https://(?:www\.)?dropbox\.com/[^\s<>"]+',
+            r'https://dl\.dropboxusercontent\.com/[^\s<>"]+',
+        ],
+        'OneDrive': [
+            r'https://onedrive\.live\.com/[^\s<>"]+',
+            r'https://1drv\.ms/[^\s<>"]+',
+        ],
+        'MediaFire': [
+            r'https://(?:www\.)?mediafire\.com/[^\s<>"]+',
+        ],
+        'WeTransfer': [
+            r'https://(?:we\.tl|wetransfer\.com)/[^\s<>"]+',
+        ],
+        'pCloud': [
+            r'https://(?:my\.)?pcloud\.com/[^\s<>"]+',
+        ],
+        'Yandex Disk': [
+            r'https://disk\.yandex\.[^\s<>"/]+/[^\s<>"]+',
+        ],
+        'Box': [
+            r'https://(?:app\.)?box\.com/[^\s<>"]+',
+        ],
+        'iCloud': [
+            r'https://(?:www\.)?icloud\.com/[^\s<>"]+',
+        ]
+    }
+    
+    for service_name, patterns in cloud_patterns.items():
+        for pattern in patterns:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            for match in matches:
+                # Очищаем ссылку от лишних символов
+                clean_link = match.rstrip('.,;:)"}')
+                if clean_link not in [link['url'] for link in cloud_links]:
+                    cloud_links.append({
+                        'service': service_name,
+                        'url': clean_link
+                    })
+    
+    return cloud_links
+
+def save_cloud_links(save_dir, cloud_links, post_url):
+    """Сохраняет найденные облачные ссылки в файл"""
+    if not cloud_links:
+        return
+    
+    # Создаем папку если не существует
+    os.makedirs(save_dir, exist_ok=True)
+    cloud_file = os.path.join(save_dir, 'cloud_links.txt')
+    
+    try:
+        # Читаем существующие ссылки если файл есть
+        existing_links = set()
+        if os.path.exists(cloud_file):
+            with open(cloud_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip().startswith('http') or '] http' in line:
+                        # Извлекаем URL из строки формата "[Service] URL"
+                        if '] ' in line:
+                            url_part = line.split('] ', 1)[-1].strip()
+                            existing_links.add(url_part)
+                        elif line.strip().startswith('http'):
+                            existing_links.add(line.strip())
+        
+        # Проверяем, есть ли новые ссылки
+        new_links = []
+        for link_info in cloud_links:
+            if link_info['url'] not in existing_links:
+                new_links.append(link_info)
+        
+        if not new_links:
+            print(f"    ℹ️ Все облачные ссылки уже сохранены")
+            return
+        
+        # Добавляем новые ссылки
+        with open(cloud_file, 'a', encoding='utf-8') as f:
+            # Добавляем заголовок для нового поста
+            f.write(f"\n=== {post_url} ===\n")
+            f.write(f"Найдено: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            for link_info in new_links:
+                f.write(f"[{link_info['service']}] {link_info['url']}\n")
+                existing_links.add(link_info['url'])
+            
+            f.write("\n")
+        
+        print(f"    💾 Облачных ссылок сохранено: {len(new_links)} в cloud_links.txt")
+        
+    except Exception as e:
+        print(f"    ⚠️ Ошибка сохранения облачных ссылок: {e}")
+
+def download_cloud_files(save_dir, cloud_links, post_url):
+    """
+    Автоматически скачивает файлы из облачных хранилищ
+    """
+    if not cloud_links or not CLOUD_AUTO_ENABLED:
+        return []
+    
+    print(f"\n🌐 Автоскачивание облачных файлов: {len(cloud_links)}")
+    
+    downloader = CloudDownloader()
+    downloaded_files = []
+    
+    # Создаем подпапку для облачных файлов
+    cloud_dir = os.path.join(save_dir, "cloud_files")
+    os.makedirs(cloud_dir, exist_ok=True)
+    
+    for i, link_info in enumerate(cloud_links, 1):
+        service = link_info['service']
+        url = link_info['url']
+        
+        print(f"\n[{i}/{len(cloud_links)}] {service}: {url[:60]}...")
+        
+        try:
+            success = downloader.download_from_cloud(url, cloud_dir)
+            if success:
+                downloaded_files.append({'service': service, 'url': url})
+                print(f"✅ {service} файл скачан")
+            else:
+                print(f"❌ Не удалось скачать {service} файл")
+        except Exception as e:
+            print(f"❌ Ошибка скачивания {service}: {e}")
+        
+        # Небольшая пауза между скачиваниями
+        time.sleep(1)
+    
+    if downloaded_files:
+        print(f"\n✅ Успешно скачано облачных файлов: {len(downloaded_files)}")
+        
+        # Сохраняем лог успешных скачиваний
+        log_file = os.path.join(save_dir, "cloud_downloads.log")
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"\n=== {post_url} ===\n")
+            f.write(f"Скачано: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            for file_info in downloaded_files:
+                f.write(f"[{file_info['service']}] {file_info['url']}\n")
+            f.write("\n")
+    
+    return downloaded_files
+
+def get_file_type(filename):
+    """Определяет тип файла по расширению"""
+    if not filename:
+        return "неизвестный"
+    
+    ext = os.path.splitext(filename.lower())[1]
+    
+    # 3D модели и файлы Blender
+    if ext in ['.glb', '.gltf', '.blend', '.fbx', '.obj', '.dae', '.3ds', '.max', '.ma', '.mb']:
+        return "3D модель"
+    # Видео
+    elif ext in ['.mp4', '.avi', '.mkv', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg']:
+        return "видео"
+    # Изображения
+    elif ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tga', '.psd', '.webp', '.svg']:
+        return "изображение"
+    # Архивы
+    elif ext in ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz']:
+        return "архив"
+    # Документы
+    elif ext in ['.pdf', '.doc', '.docx', '.txt', '.rtf']:
+        return "документ"
+    # Аудио
+    elif ext in ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac']:
+        return "аудио"
+    # Unity и игровые ресурсы
+    elif ext in ['.unity', '.unitypackage', '.prefab', '.asset']:
+        return "Unity ресурс"
+    # Текстуры и материалы
+    elif ext in ['.dds', '.hdr', '.exr', '.mat']:
+        return "текстура"
+    # Исполняемые файлы
+    elif ext in ['.exe', '.msi', '.dmg', '.apk', '.ipa']:
+        return "приложение"
+    else:
+        return f"файл {ext}" if ext else "файл"
 
 # Конвертирует thumbnail URL в полный URL изображения
 def convert_thumbnail_to_full(url):
@@ -121,8 +355,8 @@ def get_creator_posts(creator_url):
     return []
 
 def get_post_media(post_url, enhanced_search=True):
-    """Enhanced поиск медиа в посте через API"""
-    print(f"  📄 Получаем медиа через API: {post_url}")
+    """Universal поиск ВСЕХ файлов в посте через API"""
+    print(f"  📄 Получаем ВСЕ файлы через API: {post_url}")
     
     # Извлекаем service, creator_id и post_id из URL
     try:
@@ -136,7 +370,7 @@ def get_post_media(post_url, enhanced_search=True):
             creator_id = parts[user_idx + 1]
             post_id = parts[post_idx + 1]
             
-            print(f"  📄 Получаем медиа через API: {service}/{creator_id}/post/{post_id}")
+            print(f"  📄 Получаем все файлы через API: {service}/{creator_id}/post/{post_id}")
             
             api_url = f"https://kemono.cr/api/v1/{service}/user/{creator_id}/post/{post_id}"
             response = requests.get(api_url, headers=HEADERS, verify=False, timeout=30)
@@ -148,77 +382,96 @@ def get_post_media(post_url, enhanced_search=True):
             
             data = response.json()
             
-            print(f"  🔍 Enhanced API Search ВКЛЮЧЕН - ищем ВСЕ медиа (файлы + вложения + контент)")
+            print(f"  🔍 UNIVERSAL SEARCH - ищем ВСЕ типы файлов (3D, архивы, документы, медиа)")
             
             media_links = []
+            found_files = []  # Для подсчета типов файлов
+            
+            # Отслеживаем уже добавленные файлы по пути, чтобы избежать дубликатов
+            added_file_paths = set()
             
             # 1. Основной файл поста (в post.file)
             post_data = data.get('post', {})
             if 'file' in post_data and post_data['file']:
                 filename = post_data['file'].get('name', 'unknown')
                 file_path = post_data['file'].get('path', '')
-                if file_path:
+                if file_path and is_supported_file(filename):
                     # Поддерживаем разные домены (n3, n4, etc.)
                     file_url = f"https://n3.kemono.cr/data{file_path}?f={filename}"
-                    print(f"    📁 Основной файл: {filename}")
-                    print(f"       URL: {file_url}")
+                    file_type = get_file_type(filename)
+                    print(f"    📁 Основной файл ({file_type}): {filename}")
+                    found_files.append(file_type)
                     media_links.append(file_url)
+                    added_file_paths.add(file_path)
             
             # 1.1. Основной файл поста (прямо в data.file, если есть)
             if 'file' in data and data['file']:
                 filename = data['file'].get('name', 'unknown')
                 file_path = data['file'].get('path', '')
-                if file_path:
+                if file_path and is_supported_file(filename) and file_path not in added_file_paths:
                     file_url = f"https://n3.kemono.cr/data{file_path}?f={filename}"
-                    print(f"    📁 Дополнительный файл: {filename}")
-                    print(f"       URL: {file_url}")
-                    if file_url not in media_links:
-                        media_links.append(file_url)
+                    file_type = get_file_type(filename)
+                    print(f"    📁 Дополнительный файл ({file_type}): {filename}")
+                    found_files.append(file_type)
+                    media_links.append(file_url)
+                    added_file_paths.add(file_path)
             
-            # 2. Вложения поста (в post.attachments)
+            # 2. Вложения поста (в post.attachments) - УНИВЕРСАЛЬНЫЙ ПОИСК
             if 'attachments' in post_data and post_data['attachments']:
-                print(f"  📎 Найдено вложений в post: {len(post_data['attachments'])}")
+                print(f"  📎 Анализируем вложения в post: {len(post_data['attachments'])}")
                 for attachment in post_data['attachments']:
                     filename = attachment.get('name', 'unknown')
                     file_path = attachment.get('path', '')
-                    if file_path:
-                        # Поддерживаем разные домены kemono
+                    if file_path and filename != 'unknown' and file_path not in added_file_paths:
                         file_url = f"https://n3.kemono.cr/data{file_path}?f={filename}"
-                        print(f"      • {filename}")
-                        print(f"        URL: {file_url}")
-                        media_links.append(file_url)
+                        file_type = get_file_type(filename)
+                        
+                        # Проверяем все файлы, не только известные расширения
+                        if is_supported_file(filename) or '.' in filename:
+                            print(f"      📎 {file_type}: {filename}")
+                            found_files.append(file_type)
+                            media_links.append(file_url)
+                            added_file_paths.add(file_path)
+                        else:
+                            print(f"      ⚠️ Неизвестный тип: {filename}")
             
-            # 2.1. Вложения поста (прямо в data.attachments)
+            # 2.1. Вложения поста (прямо в data.attachments) - УНИВЕРСАЛЬНЫЙ ПОИСК
             if 'attachments' in data and data['attachments']:
-                print(f"  📎 Найдено корневых вложений: {len(data['attachments'])}")
+                print(f"  📎 Анализируем корневые вложения: {len(data['attachments'])}")
                 for attachment in data['attachments']:
                     filename = attachment.get('name', 'unknown')
                     file_path = attachment.get('path', '')
-                    if file_path:
+                    if file_path and filename != 'unknown' and file_path not in added_file_paths:
                         file_url = f"https://n3.kemono.cr/data{file_path}?f={filename}"
-                        print(f"      • {filename}")
-                        print(f"        URL: {file_url}")
-                        if file_url not in media_links:
+                        file_type = get_file_type(filename)
+                        
+                        if (is_supported_file(filename) or '.' in filename):
+                            print(f"      📎 {file_type}: {filename}")
+                            found_files.append(file_type)
                             media_links.append(file_url)
+                            added_file_paths.add(file_path)
             
-            # 2.2. Превью файлы (data.previews)
+            # 2.2. Превью файлы (data.previews) - УНИВЕРСАЛЬНЫЙ ПОИСК
             if 'previews' in data and data['previews']:
-                print(f"  🖼️ Найдено превью: {len(data['previews'])}")
+                print(f"  🖼️ Анализируем превью: {len(data['previews'])}")
                 for preview in data['previews']:
                     if isinstance(preview, dict):
                         filename = preview.get('name', 'unknown')
                         file_path = preview.get('path', '')
                         server = preview.get('server', 'https://n1.kemono.cr')
-                        if file_path:
+                        if file_path and filename != 'unknown' and file_path not in added_file_paths:
                             # Используем указанный сервер или n1 по умолчанию
                             if server and server.startswith('http'):
                                 file_url = f"{server}/data{file_path}?f={filename}"
                             else:
                                 file_url = f"https://n1.kemono.cr/data{file_path}?f={filename}"
-                            print(f"      🖼️ {filename}")
-                            print(f"        URL: {file_url}")
-                            if file_url not in media_links:
+                            
+                            file_type = get_file_type(filename)
+                            if (is_supported_file(filename) or '.' in filename):
+                                print(f"      🖼️ {file_type}: {filename}")
+                                found_files.append(file_type)
                                 media_links.append(file_url)
+                                added_file_paths.add(file_path)
             
             # 3. Дополнительные вложения из других мест
             for key in ['attachments', 'file']:
@@ -256,13 +509,38 @@ def get_post_media(post_url, enhanced_search=True):
             
             print(f"  🔍 Enhanced: анализируем контент ({len(content)} символов)")
             
-            # Ищем ссылки в контенте
+            # Ищем облачные ссылки в контенте
+            cloud_links = []
+            if content:
+                cloud_links = detect_cloud_links(content)
+                if cloud_links:
+                    print(f"  ☁️ Найдено облачных ссылок: {len(cloud_links)}")
+                    cloud_stats = {}
+                    for link_info in cloud_links:
+                        service = link_info['service']
+                        cloud_stats[service] = cloud_stats.get(service, 0) + 1
+                    
+                    for service, count in cloud_stats.items():
+                        print(f"      ☁️ {service}: {count}")
+            
+            # Ищем ссылки на файлы в контенте (исключая облачные)
             if content:
                 content_links = find_media_links_in_content(content)
                 if content_links:
-                    print(f"  🔗 Enhanced: найдено ссылок в контенте: {len(content_links)}")
+                    # Фильтруем облачные ссылки, чтобы не скачивать их как файлы
+                    cloud_domains = ['drive.google.com', 'mega.nz', 'mega.co.nz', 'dropbox.com', 
+                                   'onedrive.live.com', '1drv.ms', 'mediafire.com', 'we.tl', 
+                                   'wetransfer.com', 'pcloud.com', 'disk.yandex.', 'box.com', 'icloud.com']
+                    
+                    filtered_links = []
                     for link in content_links:
-                        if link not in media_links:
+                        is_cloud = any(domain in link.lower() for domain in cloud_domains)
+                        if not is_cloud and link not in media_links:
+                            filtered_links.append(link)
+                    
+                    if filtered_links:
+                        print(f"  🔗 Enhanced: найдено файловых ссылок в контенте: {len(filtered_links)}")
+                        for link in filtered_links:
                             media_links.append(link)
                             filename = link.split('/')[-1].split('?')[0][:50]
                             print(f"      🔗 Контент ссылка: {filename}...")
@@ -309,28 +587,64 @@ def get_post_media(post_url, enhanced_search=True):
                                 media_links.append(file_url)
                                 print(f"        📎 Добавлено: {file_url}")
             
-        # Удаляем дубликаты
+        # Удаляем дубликаты и пересчитываем статистику
         unique_links = list(dict.fromkeys(media_links))
         
+        # Пересчитываем статистику файлов без дубликатов
+        found_files = []
+        for link in unique_links:
+            if '?f=' in link:
+                filename = link.split('?f=')[-1]
+            else:
+                filename = link.split('/')[-1].split('?')[0]
+            file_type = get_file_type(filename)
+            found_files.append(file_type)
+        
         if len(unique_links) > 0:
-            print(f"   📎 Скачиваю {len(unique_links)} файлов:")
+            # Подсчитываем статистику по типам файлов
+            file_stats = {}
+            for file_type in found_files:
+                file_stats[file_type] = file_stats.get(file_type, 0) + 1
+            
+            print(f"   🎯 Найдено {len(unique_links)} файлов:")
+            for file_type, count in file_stats.items():
+                print(f"     • {file_type}: {count}")
+            
+            print(f"   📋 Список файлов:")
             for f in unique_links:
                 # Получаем имя файла для отображения
                 if '?f=' in f:
                     display_name = f.split('?f=')[-1]
                 else:
                     display_name = f.split('/')[-1]
-                print(f"     • {display_name}")
+                file_type = get_file_type(display_name)
+                print(f"     📎 {display_name} ({file_type})")
         else:
-            print(f"   ⚠️ API не нашел медиа, пробуем HTML парсинг...")
+            print(f"   ⚠️ API не нашел файлы, пробуем HTML парсинг...")
             # Если API не нашел медиа, пробуем HTML
             html_media = get_post_media_from_html_fallback(post_url)
             if html_media:
                 print(f"   ✅ HTML парсинг нашел {len(html_media)} файлов!")
                 return html_media
             else:
-                print(f"   ❌ Медиа не найдено")
+                print(f"   ❌ Файлы не найдены")
             
+        # Сохраняем облачные ссылки если найдены
+        if 'cloud_links' in locals() and cloud_links:
+            # Сохраняем в текущую папку или папку downloads
+            try:
+                # Создаем папку downloads если не существует
+                downloads_dir = os.path.join(os.getcwd(), "downloads")
+                os.makedirs(downloads_dir, exist_ok=True)
+                save_cloud_links(downloads_dir, cloud_links, post_url)
+                
+                # Автоматически скачиваем облачные файлы если включено
+                if CLOUD_AUTO_ENABLED:
+                    download_cloud_files(downloads_dir, cloud_links, post_url)
+                    
+            except Exception as e:
+                print(f"    ⚠️ Не удалось сохранить облачные ссылки: {e}")
+        
         return unique_links
             
     except Exception as e:
@@ -568,10 +882,21 @@ def find_media_links_in_content(content):
                 media_links.append(match)
                 print(f"      📸 HTML тег: {match.split('/')[-1][:50]}...")
     
-    # 2. Паттерны для поиска обычных ссылок в тексте
+    # 2. Паттерны для поиска ВСЕХ типов файлов в тексте
     url_patterns = [
-        r'https?://[^\s<>"]+\.(?:mp4|avi|mkv|mov|webm|zip|rar|jpg|png|gif|jpeg)',
+        # Все поддерживаемые расширения
+        r'https?://[^\s<>"]+\.(?:glb|gltf|blend|fbx|obj|dae|3ds|max|ma|mb)',  # 3D модели
+        r'https?://[^\s<>"]+\.(?:mp4|avi|mkv|mov|webm|flv|wmv|m4v|mpg|mpeg)',  # Видео
+        r'https?://[^\s<>"]+\.(?:png|jpg|jpeg|gif|bmp|tiff|tga|psd|webp|svg)',  # Изображения
+        r'https?://[^\s<>"]+\.(?:zip|rar|7z|tar|gz|bz2|xz)',  # Архивы
+        r'https?://[^\s<>"]+\.(?:pdf|doc|docx|txt|rtf)',  # Документы
+        r'https?://[^\s<>"]+\.(?:mp3|wav|flac|ogg|m4a|aac)',  # Аудио
+        r'https?://[^\s<>"]+\.(?:unity|unitypackage|prefab|asset)',  # Unity
+        r'https?://[^\s<>"]+\.(?:dds|hdr|exr|mat)',  # Текстуры
+        r'https?://[^\s<>"]+\.(?:exe|msi|dmg|apk|ipa)',  # Приложения
+        # Внешние хостинги
         r'https?://[^\s<>"]*(?:drive\.google\.com|mega\.nz|dropbox\.com|mediafire\.com|onedrive\.live\.com)[^\s<>"]*',
+        # Kemono данные
         r'https?://[^\s<>"]*(?:kemono\.cr|kemono\.party)[^\s<>"]*/data/[^\s<>"]*',
     ]
     
@@ -630,11 +955,14 @@ def get_post_media_from_html_fallback(post_url):
                     filename = src.split('/')[-1].split('?')[0]
                     print(f"    🎬 HTML видео: {filename}")
         
-        # 3. Ищем обычные ссылки на медиа
+        # 3. Ищем ВСЕ ссылки на файлы (универсальный поиск)
         all_links = soup.find_all('a', href=True)
         for link in all_links:
             href = link['href']
-            if any(ext in href.lower() for ext in ['.mp4', '.avi', '.mkv', '.mov', '.webm', '.zip', '.rar']):
+            filename = href.split('/')[-1].split('?')[0]
+            
+            # Проверяем все файлы с расширениями
+            if '.' in filename and is_supported_file(filename):
                 if href.startswith('/'):
                     href = f"https://kemono.cr{href}"
                 elif not href.startswith('http'):
@@ -642,8 +970,40 @@ def get_post_media_from_html_fallback(post_url):
                 
                 if href not in media_links:
                     media_links.append(href)
-                    filename = href.split('/')[-1].split('?')[0]
-                    print(f"    🔗 HTML ссылка: {filename}")
+                    file_type = get_file_type(filename)
+                    print(f"    🔗 HTML файл ({file_type}): {filename}")
+        
+        # Ищем облачные ссылки в HTML контенте
+        page_content = soup.get_text()
+        cloud_links = detect_cloud_links(str(soup) + page_content)
+        
+        if cloud_links:
+            print(f"  ☁️ HTML парсинг нашел облачных ссылок: {len(cloud_links)}")
+            cloud_stats = {}
+            for link_info in cloud_links:
+                service = link_info['service']
+                cloud_stats[service] = cloud_stats.get(service, 0) + 1
+            
+            for service, count in cloud_stats.items():
+                print(f"      ☁️ {service}: {count}")
+            
+            # Сохраняем облачные ссылки
+            try:
+                parts = post_url.split('/')
+                if 'kemono.cr' in post_url and 'user' in parts:
+                    service_idx = parts.index('kemono.cr') + 1
+                    user_idx = parts.index('user')
+                    service = parts[service_idx]
+                    creator_id = parts[user_idx + 1]
+                    
+                    creator_folder = f"{service}_user_{creator_id}"
+                    save_cloud_links(creator_folder, cloud_links, post_url)
+                    
+                    # Автоматически скачиваем облачные файлы если включено
+                    if CLOUD_AUTO_ENABLED:
+                        download_cloud_files(creator_folder, cloud_links, post_url)
+            except Exception:
+                pass
         
         if media_links:
             print(f"  ✅ HTML парсинг нашел {len(media_links)} файлов")
@@ -675,6 +1035,39 @@ def download_post_media(post_url, save_dir, progress_data=None):
         
         # Получаем медиа файлы из поста
         media_links = get_post_media(post_url, enhanced_search=True)
+        
+        # Дополнительно ищем облачные ссылки через API если нужно
+        try:
+            parts = post_url.split('/')
+            if 'kemono.cr' in post_url and 'user' in parts and 'post' in parts:
+                service_idx = parts.index('kemono.cr') + 1
+                user_idx = parts.index('user')
+                post_idx = parts.index('post')
+                
+                service = parts[service_idx]
+                creator_id = parts[user_idx + 1]
+                post_id = parts[post_idx + 1]
+                
+                # Получаем данные поста для поиска облачных ссылок
+                api_url = f"https://kemono.cr/api/v1/{service}/user/{creator_id}/post/{post_id}"
+                response = requests.get(api_url, headers=HEADERS, verify=False, timeout=30)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    content = data.get('content', '') or ''
+                    if not content and data.get('post'):
+                        content = data['post'].get('content', '') or ''
+                    
+                    if content:
+                        cloud_links = detect_cloud_links(content)
+                        if cloud_links:
+                            save_cloud_links(save_dir, cloud_links, post_url)
+                            
+                            # Автоматически скачиваем облачные файлы если включено
+                            if CLOUD_AUTO_ENABLED:
+                                download_cloud_files(save_dir, cloud_links, post_url)
+        except Exception:
+            pass  # Не критично если не удалось найти облачные ссылки
         
         if not media_links:
             print(f"  ⚠️ Медиа не найдено в посте")
@@ -815,14 +1208,36 @@ def show_download_status(save_dir):
 
 def console_interface():
     """Консольный интерфейс для программы"""
-    print("🦊 KemonoDownloader v2.3 Final - Console Edition")
-    print("="*50)
-    print("Поддерживаемые форматы:")
-    print("🎬 Видео: MP4, MOV, AVI, MKV, WEBM")
-    print("🖼️ Изображения: PNG, JPG, JPEG, GIF")
-    print("📦 Архивы: ZIP, RAR")
-    print("🔄 Автоматическое продолжение после краша")
-    print("="*50)
+    print("🦊 KemonoDownloader v2.6 Cloud Auto - Console Edition")
+    print("="*65)
+    print("🎯 УНИВЕРСАЛЬНЫЙ ПОИСК ВСЕХ ФАЙЛОВ:")
+    print("🎭 3D модели: GLB, GLTF, BLEND, FBX, OBJ, DAE, 3DS, MAX")
+    print("🎬 Видео: MP4, MOV, AVI, MKV, WEBM, FLV, WMV")
+    print("🖼️ Изображения: PNG, JPG, JPEG, GIF, BMP, TGA, PSD, SVG")
+    print("📦 Архивы: ZIP, RAR, 7Z, TAR, GZ, BZ2, XZ")
+    print("� Документы: PDF, DOC, DOCX, TXT, RTF")
+    print("🎵 Аудио: MP3, WAV, FLAC, OGG, M4A, AAC")
+    print("🎮 Unity: UNITY, UNITYPACKAGE, PREFAB, ASSET")
+    print("🎨 Текстуры: DDS, HDR, EXR, MAT")
+    print("📱 Приложения: EXE, MSI, DMG, APK, IPA")
+    print("�🔄 Автоматическое продолжение после краша")
+    print("="*65)
+    print("")
+    print("☁️ ПОДДЕРЖКА ОБЛАЧНЫХ ССЫЛОК:")
+    print("🔗 Google Drive, MEGA, Dropbox, OneDrive")
+    print("🔗 MediaFire, WeTransfer, pCloud, Yandex Disk")
+    print("🔗 Box, iCloud и другие облачные сервисы")
+    print("💾 Ссылки сохраняются в файл cloud_links.txt")
+    
+    # Показываем статус автоскачивания
+    if CLOUD_AUTO_ENABLED:
+        print("🚀 АВТОСКАЧИВАНИЕ ОБЛАЧНЫХ ФАЙЛОВ: ✅ ВКЛЮЧЕНО")
+        print("   📁 Файлы сохраняются в подпапку cloud_files/")
+    else:
+        print("⚠️ АВТОСКАЧИВАНИЕ ОБЛАЧНЫХ ФАЙЛОВ: ❌ ОТКЛЮЧЕНО")
+        print("   💡 Для включения добавьте файл cloud_downloader.py")
+        
+    print("="*65)
     
     while True:
         try:
@@ -832,7 +1247,11 @@ def console_interface():
             print("   • 'status' - проверить статус загрузки в папке")
             print("   • 'exit' - выход")
             
-            command = input("\n👉 Команда: ").strip()
+            try:
+                command = input("\n👉 Команда: ").strip()
+            except EOFError:
+                print("\n👋 До свидания!")
+                break
             
             if command.lower() in ['exit', 'quit', 'выход', 'q']:
                 print("👋 До свидания!")
@@ -843,7 +1262,10 @@ def console_interface():
                 print("   • Введите путь к папке загрузок")
                 print("   • Или нажмите Enter для текущей папки")
                 
-                status_folder = input("👉 Папка: ").strip()
+                try:
+                    status_folder = input("👉 Папка: ").strip()
+                except EOFError:
+                    status_folder = "downloads"
                 if not status_folder:
                     status_folder = "downloads"
                 
@@ -853,7 +1275,10 @@ def console_interface():
                     print("❌ Папка не найдена!")
                 
                 print("\n" + "="*50)
-                input("📌 Нажмите Enter для продолжения...")
+                try:
+                    input("📌 Нажмите Enter для продолжения...")
+                except (EOFError, KeyboardInterrupt):
+                    break
                 continue
             
             if not command:
@@ -870,7 +1295,10 @@ def console_interface():
             print("   • Введите путь к папке")
             print("   • Или нажмите Enter для текущей папки")
             
-            download_folder = input("👉 Папка: ").strip()
+            try:
+                download_folder = input("👉 Папка: ").strip()
+            except EOFError:
+                download_folder = "downloads"
             
             if not download_folder:
                 download_folder = "downloads"
@@ -903,14 +1331,24 @@ def console_interface():
                     print(f"\n❌ Не удалось загрузить автора")
             
             print("\n" + "="*50)
-            input("📌 Нажмите Enter для продолжения...")
+            try:
+                input("📌 Нажмите Enter для продолжения...")
+            except (EOFError, KeyboardInterrupt):
+                break
             
         except KeyboardInterrupt:
             print("\n\n👋 Программа остановлена пользователем. До свидания!")
             break
+        except EOFError:
+            print("\n\n👋 Ввод завершен. До свидания!")
+            break
         except Exception as e:
             print(f"\n❌ Произошла ошибка: {e}")
-            input("📌 Нажмите Enter для продолжения...")
+            try:
+                input("📌 Нажмите Enter для продолжения...")
+            except (EOFError, KeyboardInterrupt):
+                print("\n👋 До свидания!")
+                break
 
 if __name__ == "__main__":
     console_interface()

@@ -64,6 +64,21 @@ downloads/
 # Test files
 test_*/
 *test*.py
+diagnose_*.py
 *analyze*.py
 *response*.json
 *post*.html
+
+# KemonoDownloader specific
+*.kemono_progress.json
+cloud_links.txt
+cloud_downloads.log
+*.spec
+KemonoDownloader_Console_*.spec
+KemonoDownloader_GUI_*.spec
+
+# Old version files
+CLOUD_LINKS_GUIDE.md
+UNIVERSAL_GUIDE.md
+READY_TO_USE.md
+КРАТКАЯ_ИНСТРУКЦИЯ.md
