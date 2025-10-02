@@ -205,8 +205,8 @@ def download_cloud_files(save_dir, cloud_links, post_url):
         except Exception as e:
             print(f"❌ Ошибка скачивания {service}: {e}")
         
-        # Небольшая пауза между скачиваниями
-        time.sleep(1)
+        # Минимальная пауза для стабильности
+        time.sleep(0.1)
     
     if downloaded_files:
         print(f"\n✅ Успешно скачано облачных файлов: {len(downloaded_files)}")
@@ -375,7 +375,7 @@ def get_post_media(post_url, enhanced_search=True, save_dir=None):
             print(f"  📄 Получаем все файлы через API: {service}/{creator_id}/post/{post_id}")
             
             api_url = f"https://kemono.cr/api/v1/{service}/user/{creator_id}/post/{post_id}"
-            response = requests.get(api_url, headers=HEADERS, verify=False, timeout=30)
+            response = requests.get(api_url, headers=HEADERS, verify=False, timeout=15)
             
             print(f"  📶 API Status: {response.status_code}")
             
@@ -809,11 +809,11 @@ def download_file(url, save_dir, progress_data=None):
                 os.remove(filepath)
         
         # Пробуем скачать с оригинального URL
-        response = requests.get(url, headers=HEADERS, verify=False, timeout=30, stream=True)
+        response = requests.get(url, headers=HEADERS, verify=False, timeout=15, stream=True)
         
         if response.status_code == 200:
             with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=65536):  # 64KB chunks для скорости
                     if chunk:
                         f.write(chunk)
             
@@ -1110,7 +1110,7 @@ def download_post_media(post_url, save_dir, progress_data=None):
         print(f"  📁 Найдено файлов: {len(media_links)}")
         
         # Многопоточное скачивание
-        success_count = download_files_parallel(media_links, save_dir, progress_data, max_workers=3)
+        success_count = download_files_parallel(media_links, save_dir, progress_data, max_workers=5)
         
         # Отмечаем пост как завершенный
         if progress_data:
@@ -1186,10 +1186,10 @@ def download_creator_posts(creator_url, save_dir, post_limit=None):
             else:
                 print(f"  ⚠️ Пост {i+1} пропущен")
             
-            # Небольшая пауза между постами
+            # Минимальная пауза между постами
             if i < len(pending_posts) - 1:
                 import time
-                time.sleep(1)
+                time.sleep(0.1)
         
         # Финальная статистика
         final_completed_posts = len(progress_data.get('completed_posts', []))
@@ -1258,7 +1258,7 @@ def console_interface():
     print("💾 Ссылки сохраняются в файл cloud_links.txt")
     
     print("🚄 МНОГОПОТОЧНОЕ СКАЧИВАНИЕ:")
-    print("   ⚡ До 3 потоков одновременно для максимальной скорости")
+    print("   ⚡ До 5 потоков одновременно для максимальной скорости")
     print("   📊 Прогресс отображается в реальном времени")
     
     # Показываем статус автоскачивания
