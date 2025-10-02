@@ -310,10 +310,11 @@ def get_creator_posts(creator_url):
                     offset = 0
                     limit = 50
                     
+                    page = 1
                     while True:
                         try:
                             url = f"https://kemono.cr/api/v1/{service}/user/{creator_id}/posts?o={offset}"
-                            print(f"Запрос к API: {url}")
+                            print(f"📄 Загружаем страницу {page} (offset {offset})...")
                             
                             response = requests.get(url, headers=HEADERS, verify=False, timeout=30)
                             
@@ -331,13 +332,19 @@ def get_creator_posts(creator_url):
                             batch_posts = [post['id'] for post in data if 'id' in post]
                             posts.extend(batch_posts)
                             
-                            print(f"  📊 Получено постов: {len(batch_posts)}, всего: {len(posts)}")
+                            print(f"  📊 Страница {page}: получено {len(batch_posts)} постов, всего: {len(posts)}")
                             
                             # Если получили меньше limit, значит это последняя страница
                             if len(data) < limit:
+                                print(f"  🏁 Последняя страница (получено {len(data)} < {limit})")
                                 break
                             
                             offset += limit
+                            page += 1
+                            
+                            # Небольшая пауза между запросами для снижения нагрузки на сервер
+                            import time
+                            time.sleep(0.5)
                             
                         except Exception as e:
                             print(f"  ❌ Ошибка запроса: {e}")
@@ -397,7 +404,11 @@ def get_post_media(post_url, enhanced_search=True, save_dir=None):
             if 'file' in post_data and post_data['file']:
                 filename = post_data['file'].get('name', 'unknown')
                 file_path = post_data['file'].get('path', '')
-                if file_path and is_supported_file(filename):
+                
+                # Проверяем, не является ли filename прямой ссылкой
+                if isinstance(filename, str) and ('http' in filename or 'mega.nz' in filename or 'drive.google.com' in filename):
+                    print(f"    ⚠️ Пропускаем прямую ссылку в filename: {filename[:60]}...")
+                elif file_path and is_supported_file(filename):
                     # Поддерживаем разные домены (n3, n4, etc.)
                     file_url = f"https://n3.kemono.cr/data{file_path}?f={filename}"
                     file_type = get_file_type(filename)
@@ -410,7 +421,11 @@ def get_post_media(post_url, enhanced_search=True, save_dir=None):
             if 'file' in data and data['file']:
                 filename = data['file'].get('name', 'unknown')
                 file_path = data['file'].get('path', '')
-                if file_path and is_supported_file(filename) and file_path not in added_file_paths:
+                
+                # Проверяем, не является ли filename прямой ссылкой
+                if isinstance(filename, str) and ('http' in filename or 'mega.nz' in filename or 'drive.google.com' in filename):
+                    print(f"    ⚠️ Пропускаем прямую ссылку в filename: {filename[:60]}...")
+                elif file_path and is_supported_file(filename) and file_path not in added_file_paths:
                     file_url = f"https://n3.kemono.cr/data{file_path}?f={filename}"
                     file_type = get_file_type(filename)
                     print(f"    📁 Дополнительный файл ({file_type}): {filename}")
@@ -461,6 +476,12 @@ def get_post_media(post_url, enhanced_search=True, save_dir=None):
                         filename = preview.get('name', 'unknown')
                         file_path = preview.get('path', '')
                         server = preview.get('server', 'https://n1.kemono.cr')
+                        
+                        # Проверяем, не является ли filename прямой ссылкой
+                        if isinstance(filename, str) and ('http' in filename or 'mega.nz' in filename or 'drive.google.com' in filename):
+                            print(f"      ⚠️ Пропускаем прямую ссылку в preview filename: {filename[:60]}...")
+                            continue
+                            
                         if file_path and filename != 'unknown' and file_path not in added_file_paths:
                             # Используем указанный сервер или n1 по умолчанию
                             if server and server.startswith('http'):
@@ -974,10 +995,14 @@ def find_media_links_in_content(content):
         r'<a[^>]*class="[^"]*fileThumb[^"]*image-link[^"]*"[^>]*href="([^"]+)"',
         # Любые img src="..." с kemono доменами
         r'<img[^>]*src="([^"]*(?:kemono\.cr|kemono\.party)[^"]*)"',
+        # Относительные ссылки img src="/..." (kemono файлы)
+        r'<img[^>]*src="(/[^"]*\.(?:png|jpg|jpeg|gif|webp|svg|mp4|avi|mkv|mov|webm)[^"]*)"',
         # Любые a href="..." с медиа файлами
         r'<a[^>]*href="([^"]*(?:\.mp4|\.avi|\.mkv|\.mov|\.webm|\.zip|\.rar|\.jpg|\.png|\.gif|\.jpeg)[^"]*)"',
         # Любые ссылки на data/ папки kemono
         r'<[^>]*(?:href|src)="([^"]*(?:kemono\.cr|kemono\.party)[^"]*/data/[^"]*)"',
+        # Относительные ссылки на data/ папки
+        r'<[^>]*(?:href|src)="(/data/[^"]*)"',
     ]
     
     for pattern in html_patterns:
@@ -985,14 +1010,32 @@ def find_media_links_in_content(content):
         for match in matches:
             # Очищаем от HTML entities и лишних символов
             match = match.replace('&amp;', '&').rstrip('.,;:)')
-            # Добавляем https:// если ссылка начинается с //
-            if match.startswith('//'):
+            
+            # Преобразуем относительные ссылки в полные
+            if match.startswith('/'):
+                match = 'https://kemono.cr' + match
+            elif match.startswith('//'):
                 match = 'https:' + match
-            if match not in media_links and 'kemono.cr' in match:
+            
+            # Проверяем, что это НЕ облачная ссылка
+            cloud_domains = ['drive.google.com', 'mega.nz', 'mega.co.nz', 'dropbox.com', 
+                            'onedrive.live.com', '1drv.ms', 'mediafire.com', 'we.tl', 
+                            'wetransfer.com', 'pcloud.com', 'disk.yandex.', 'box.com', 
+                            'icloud.com', 'patreon.com/media-u']
+            
+            # Фильтруем облачные ссылки
+            is_cloud = any(domain in match.lower() for domain in cloud_domains)
+            
+            if not is_cloud and match not in media_links:
                 media_links.append(match)
                 print(f"      📸 HTML тег: {match.split('/')[-1][:50]}...")
     
-    # 2. Паттерны для поиска ВСЕХ типов файлов в тексте
+    # 2. Паттерны для поиска файлов в тексте (ИСКЛЮЧАЯ облачные хранилища)
+    # Определяем облачные домены для фильтрации
+    cloud_domains = ['drive.google.com', 'mega.nz', 'mega.co.nz', 'dropbox.com', 
+                    'onedrive.live.com', '1drv.ms', 'mediafire.com', 'we.tl', 
+                    'wetransfer.com', 'pcloud.com', 'disk.yandex.', 'box.com', 'icloud.com']
+    
     url_patterns = [
         # Все поддерживаемые расширения
         r'https?://[^\s<>"]+\.(?:glb|gltf|blend|fbx|obj|dae|3ds|max|ma|mb)',  # 3D модели
@@ -1004,9 +1047,7 @@ def find_media_links_in_content(content):
         r'https?://[^\s<>"]+\.(?:unity|unitypackage|prefab|asset)',  # Unity
         r'https?://[^\s<>"]+\.(?:dds|hdr|exr|mat)',  # Текстуры
         r'https?://[^\s<>"]+\.(?:exe|msi|dmg|apk|ipa)',  # Приложения
-        # Внешние хостинги
-        r'https?://[^\s<>"]*(?:drive\.google\.com|mega\.nz|dropbox\.com|mediafire\.com|onedrive\.live\.com)[^\s<>"]*',
-        # Kemono данные
+        # Kemono данные (ТОЛЬКО kemono, без облачных хранилищ)
         r'https?://[^\s<>"]*(?:kemono\.cr|kemono\.party)[^\s<>"]*/data/[^\s<>"]*',
     ]
     
@@ -1015,7 +1056,11 @@ def find_media_links_in_content(content):
         for match in matches:
             # Очищаем от лишних символов в конце
             match = match.rstrip('.,;:)')
-            if match not in media_links:
+            
+            # ВАЖНО: Проверяем, что это НЕ облачная ссылка
+            is_cloud = any(domain in match.lower() for domain in cloud_domains)
+            
+            if not is_cloud and match not in media_links:
                 media_links.append(match)
                 print(f"      🔗 Текст ссылка: {match.split('/')[-1][:50]}...")
     
@@ -1281,7 +1326,7 @@ def show_download_status(save_dir):
 
 def console_interface():
     """Консольный интерфейс для программы"""
-    print("🦊 KemonoDownloader v2.7 Multithread - Console Edition")
+    print("🦊 KemonoDownloader v2.8.1 Multithread - Console Edition")
     print("="*65)
     print("🎯 УНИВЕРСАЛЬНЫЙ ПОИСК ВСЕХ ФАЙЛОВ:")
     print("🎭 3D модели: GLB, GLTF, BLEND, FBX, OBJ, DAE, 3DS, MAX")

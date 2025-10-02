@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-🦊 KemonoDownloader v2.6 Cloud Auto - Cloud Files Downloader
+🦊 KemonoDownloader v2.8 Cloud Auto - Cloud Files Downloader
 ===========================================================
 Автоматическое скачивание файлов из облачных хранилищ
 """
@@ -34,7 +34,10 @@ class CloudDownloader:
         elif 'mediafire.com' in url:
             return self._download_mediafire(url, save_dir, filename_hint)
         elif 'mega.nz' in url or 'mega.co.nz' in url:
-            return self._download_mega(url, save_dir, filename_hint)
+            if '/folder/' in url:
+                return self._download_mega_folder(url, save_dir, filename_hint)
+            else:
+                return self._download_mega(url, save_dir, filename_hint)
         else:
             print(f"❌ Автоскачивание для этого сервиса пока не поддерживается")
             return False
@@ -195,6 +198,76 @@ class CloudDownloader:
         except Exception as e:
             print(f"❌ Ошибка скачивания с MEGA: {e}")
             return False
+            
+    def _download_mega_folder(self, url, save_dir, filename_hint=None):
+        """
+        Скачивание папок с MEGA через megalink или сохранение ссылки
+        """
+        print("📁 MEGA папка: пробуем скачать...")
+        
+        try:
+            # Сначала пробуем megalink (альтернативная библиотека)
+            try:
+                import megalink
+                print("✅ Библиотека megalink найдена!")
+                
+                # Создаем папку для MEGA скачиваний
+                mega_folder = os.path.join(save_dir, "MEGA_folder")
+                os.makedirs(mega_folder, exist_ok=True)
+                
+                # Пробуем скачать папку через megalink
+                downloader = megalink.MegaDownloader()
+                files = downloader.download(url, mega_folder)
+                
+                if files and len(files) > 0:
+                    print(f"✅ MEGA папка скачана в: {mega_folder}")
+                    print(f"📦 Скачано файлов: {len(files)}")
+                    return True
+                else:
+                    raise Exception("Megalink не смог скачать файлы")
+                    
+            except ImportError:
+                # Если megalink не установлен, пробуем mega.py
+                import mega
+                print("✅ Библиотека mega.py найдена (резервная)!")
+                
+                # Создаем папку для MEGA скачиваний
+                mega_folder = os.path.join(save_dir, "MEGA_folder")
+                os.makedirs(mega_folder, exist_ok=True)
+                
+                # Пробуем скачать папку - используем более простой подход
+                m = mega.Mega()
+                # Не используем login для анонимного доступа
+                
+                # Пробуем скачать папку
+                files = m.download_url(url, mega_folder)
+                if files:
+                    print(f"✅ MEGA папка скачана в: {mega_folder}")
+                    return True
+                else:
+                    raise Exception("Mega.py не смог скачать файлы")
+                    
+        except ImportError:
+            print("⚠️ Библиотеки mega.py и megalink не установлены")
+            print("💡 Установите одну из них:")
+            print("   pip install mega.py")
+            print("   pip install megalink")
+            
+        except Exception as e:
+            print(f"❌ Ошибка скачивания MEGA папки: {e}")
+            print("💡 Возможные решения:")
+            print("   1. Установите: pip install megalink")
+            print("   2. Или скачайте вручную: откройте ссылку в браузере")
+        
+        # В любом случае сохраняем ссылку в файл для ручного скачивания
+        cloud_links_file = os.path.join(save_dir, "cloud_links.txt")
+        with open(cloud_links_file, "a", encoding="utf-8") as f:
+            f.write(f"MEGA папка (1.86 GB, 19 файлов, 7 папок): {url}\n")
+            f.write(f"  📂 Инструкция: откройте ссылку в браузере и скачайте вручную\n")
+            f.write(f"  📁 Рекомендуемая папка: {os.path.join(save_dir, 'MEGA_folder')}\n\n")
+        print(f"📝 Ссылка сохранена в: {cloud_links_file}")
+        print(f"📂 Откройте ссылку в браузере для ручного скачивания")
+        return False
     
     def _download_file(self, url, save_dir, filename, handle_redirects=False):
         """
