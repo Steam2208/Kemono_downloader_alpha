@@ -204,7 +204,7 @@ class DownloaderWorker(QThread):
                     self.log.emit(f"📄 [{i + 1}/{len(pending_posts)}] Обрабатываем пост...")
                     
                     # Используем рабочий метод получения медиа
-                    media_links = get_post_media(post_url, enhanced_search=True)
+                    media_links = get_post_media(post_url, enhanced_search=True, save_dir=save_dir)
                     
                     if media_links:
                         self.log.emit(f"   Найдено {len(media_links)} файлов")
@@ -231,19 +231,7 @@ class DownloaderWorker(QThread):
                             
                             time.sleep(0.1)  # Небольшая пауза между файлами
                         
-                        # Проверяем облачные ссылки в посте
-                        try:
-                            response = requests.get(post_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-                            if response.status_code == 200:
-                                cloud_links = detect_cloud_links(response.text)
-                                if cloud_links:
-                                    self.log.emit(f"   ☁️ Найдено {len(cloud_links)} облачных ссылок")
-                                    cloud_downloaded = download_cloud_files(save_dir, cloud_links, post_url)
-                                    if cloud_downloaded:
-                                        total_downloaded += len(cloud_downloaded)
-                                        self.log.emit(f"   ☁️ Скачано {len(cloud_downloaded)} облачных файлов")
-                        except Exception as cloud_e:
-                            self.log.emit(f"   ⚠️ Ошибка облачных ссылок: {cloud_e}")
+                        # Облачные файлы уже обрабатываются в get_post_media
                         
                         # Отмечаем пост как завершенный
                         if 'completed_posts' not in progress_data:

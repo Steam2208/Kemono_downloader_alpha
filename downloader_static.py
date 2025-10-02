@@ -356,7 +356,7 @@ def get_creator_posts(creator_url):
     print("❌ Неверный формат URL")
     return []
 
-def get_post_media(post_url, enhanced_search=True):
+def get_post_media(post_url, enhanced_search=True, save_dir=None):
     """Universal поиск ВСЕХ файлов в посте через API"""
     print(f"  📄 Получаем ВСЕ файлы через API: {post_url}")
     
@@ -632,20 +632,37 @@ def get_post_media(post_url, enhanced_search=True):
                 print(f"   ❌ Файлы не найдены")
             
         # Сохраняем облачные ссылки если найдены
-        if 'cloud_links' in locals() and cloud_links:
-            # Сохраняем в текущую папку или папку downloads
+        # Обрабатываем облачные ссылки и добавляем их к медиа файлам
+        if 'cloud_links' in locals() and cloud_links and CLOUD_AUTO_ENABLED:
             try:
-                # Создаем папку downloads если не существует
-                downloads_dir = os.path.join(os.getcwd(), "downloads")
-                os.makedirs(downloads_dir, exist_ok=True)
+                print(f"  ☁️ Найдено облачных ссылок: {len(cloud_links)}")
+                # Скачиваем облачные файлы в указанную папку
+                if save_dir:
+                    downloads_dir = save_dir
+                else:
+                    downloads_dir = os.path.join(os.getcwd(), "downloads")
+                    
+                # Сохраняем ссылки для истории
                 save_cloud_links(downloads_dir, cloud_links, post_url)
                 
-                # Автоматически скачиваем облачные файлы если включено
-                if CLOUD_AUTO_ENABLED:
-                    download_cloud_files(downloads_dir, cloud_links, post_url)
+                # Скачиваем облачные файлы
+                downloader = CloudDownloader()
+                for i, link_info in enumerate(cloud_links, 1):
+                    service = link_info['service']
+                    url = link_info['url']
+                    print(f"    [{i}/{len(cloud_links)}] {service}: {url[:60]}...")
                     
+                    try:
+                        success = downloader.download_from_cloud(url, downloads_dir)
+                        if success:
+                            print(f"    ✅ {service} файл скачан")
+                        else:
+                            print(f"    ❌ Не удалось скачать {service} файл")
+                    except Exception as e:
+                        print(f"    ❌ Ошибка скачивания {service}: {e}")
+                        
             except Exception as e:
-                print(f"    ⚠️ Не удалось сохранить облачные ссылки: {e}")
+                print(f"  ⚠️ Ошибка обработки облачных ссылок: {e}")
         
         return unique_links
             
@@ -1082,40 +1099,9 @@ def download_post_media(post_url, save_dir, progress_data=None):
         print(f"📄 Обрабатываем пост: {post_url}")
         
         # Получаем медиа файлы из поста
-        media_links = get_post_media(post_url, enhanced_search=True)
+        media_links = get_post_media(post_url, enhanced_search=True, save_dir=save_dir)
         
-        # Дополнительно ищем облачные ссылки через API если нужно
-        try:
-            parts = post_url.split('/')
-            if 'kemono.cr' in post_url and 'user' in parts and 'post' in parts:
-                service_idx = parts.index('kemono.cr') + 1
-                user_idx = parts.index('user')
-                post_idx = parts.index('post')
-                
-                service = parts[service_idx]
-                creator_id = parts[user_idx + 1]
-                post_id = parts[post_idx + 1]
-                
-                # Получаем данные поста для поиска облачных ссылок
-                api_url = f"https://kemono.cr/api/v1/{service}/user/{creator_id}/post/{post_id}"
-                response = requests.get(api_url, headers=HEADERS, verify=False, timeout=30)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    content = data.get('content', '') or ''
-                    if not content and data.get('post'):
-                        content = data['post'].get('content', '') or ''
-                    
-                    if content:
-                        cloud_links = detect_cloud_links(content)
-                        if cloud_links:
-                            save_cloud_links(save_dir, cloud_links, post_url)
-                            
-                            # Автоматически скачиваем облачные файлы если включено
-                            if CLOUD_AUTO_ENABLED:
-                                download_cloud_files(save_dir, cloud_links, post_url)
-        except Exception:
-            pass  # Не критично если не удалось найти облачные ссылки
+        # Облачные файлы уже обработаны в get_post_media
         
         if not media_links:
             print(f"  ⚠️ Медиа не найдено в посте")
