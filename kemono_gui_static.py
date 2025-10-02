@@ -11,7 +11,7 @@ KemonoDownloader GUI v2.7 Multithread - Универсальный поиск + 
 - Расширенный поиск архивов, документов, аудио
 - Unity ресурсы: UNITY, UNITYPACKAGE, PREFAB
 - Текстуры и материалы: DDS, HDR, EXR, MAT
-- Облачные файлы сохраняются в папку cloud_files/
+- Облачные файлы сохраняются в ту же папку, что и медиа
 - Значительно увеличена скорость скачивания
 """
 
@@ -31,7 +31,8 @@ from PyQt6.QtGui import QFont, QIcon
 sys.path.append(os.path.dirname(__file__))
 from downloader_static import (get_creator_posts, get_post_media, download_file, 
                               load_download_progress, save_download_progress, 
-                              download_creator_posts, show_download_status)
+                              download_creator_posts, show_download_status,
+                              detect_cloud_links, download_cloud_files)
 import requests
 import urllib3
 import hashlib
@@ -229,6 +230,20 @@ class DownloaderWorker(QThread):
                                 self.log.emit(f"   ❌ Ошибка: {filename}")
                             
                             time.sleep(0.1)  # Небольшая пауза между файлами
+                        
+                        # Проверяем облачные ссылки в посте
+                        try:
+                            response = requests.get(post_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                            if response.status_code == 200:
+                                cloud_links = detect_cloud_links(response.text)
+                                if cloud_links:
+                                    self.log.emit(f"   ☁️ Найдено {len(cloud_links)} облачных ссылок")
+                                    cloud_downloaded = download_cloud_files(save_dir, cloud_links, post_url)
+                                    if cloud_downloaded:
+                                        total_downloaded += len(cloud_downloaded)
+                                        self.log.emit(f"   ☁️ Скачано {len(cloud_downloaded)} облачных файлов")
+                        except Exception as cloud_e:
+                            self.log.emit(f"   ⚠️ Ошибка облачных ссылок: {cloud_e}")
                         
                         # Отмечаем пост как завершенный
                         if 'completed_posts' not in progress_data:
