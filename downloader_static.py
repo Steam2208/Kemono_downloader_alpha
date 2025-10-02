@@ -8,6 +8,8 @@ import urllib.parse
 import hashlib
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Попытка импорта CloudDownloader для автоскачивания облачных файлов
 try:
@@ -699,6 +701,52 @@ def save_download_progress(save_dir, progress):
     except Exception as e:
         print(f"⚠️ Ошибка сохранения прогресса: {e}")
 
+def download_files_parallel(media_links, save_dir, progress_data=None, max_workers=4):
+    """
+    Скачивает файлы параллельно в несколько потоков
+    """
+    if not media_links:
+        return 0
+    
+    print(f"🚀 Многопоточное скачивание: {len(media_links)} файлов в {max_workers} потоков")
+    
+    success_count = 0
+    total_count = len(media_links)
+    completed_files = 0
+    lock = threading.Lock()
+    
+    def download_with_progress(args):
+        nonlocal completed_files, success_count
+        url, index = args
+        
+        result = download_file(url, save_dir, progress_data)
+        
+        with lock:
+            completed_files += 1
+            if result:
+                success_count += 1
+            
+            print(f"📥 [{completed_files}/{total_count}] {'✅' if result else '❌'} {url.split('/')[-1].split('?')[0][:50]}")
+        
+        return result
+    
+    # Подготавливаем задачи
+    tasks = [(url, i) for i, url in enumerate(media_links)]
+    
+    # Выполняем параллельно
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(download_with_progress, task) for task in tasks]
+        
+        # Ждем завершения всех задач
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"❌ Ошибка в потоке: {e}")
+    
+    print(f"📊 Многопоточное скачивание завершено: {success_count}/{total_count} файлов")
+    return success_count
+
 def download_file(url, save_dir, progress_data=None):
     """Скачивает файл по URL с поддержкой резюме"""
     try:
@@ -1073,16 +1121,10 @@ def download_post_media(post_url, save_dir, progress_data=None):
             print(f"  ⚠️ Медиа не найдено в посте")
             return False
         
-        success_count = 0
-        total_count = len(media_links)
+        print(f"  📁 Найдено файлов: {len(media_links)}")
         
-        print(f"  📁 Найдено файлов: {total_count}")
-        
-        for i, link in enumerate(media_links):
-            print(f"  [{i+1}/{total_count}] Скачиваем...")
-            
-            if download_file(link, save_dir, progress_data):
-                success_count += 1
+        # Многопоточное скачивание
+        success_count = download_files_parallel(media_links, save_dir, progress_data, max_workers=3)
         
         # Отмечаем пост как завершенный
         if progress_data:
@@ -1208,7 +1250,7 @@ def show_download_status(save_dir):
 
 def console_interface():
     """Консольный интерфейс для программы"""
-    print("🦊 KemonoDownloader v2.6 Cloud Auto - Console Edition")
+    print("🦊 KemonoDownloader v2.7 Multithread - Console Edition")
     print("="*65)
     print("🎯 УНИВЕРСАЛЬНЫЙ ПОИСК ВСЕХ ФАЙЛОВ:")
     print("🎭 3D модели: GLB, GLTF, BLEND, FBX, OBJ, DAE, 3DS, MAX")
@@ -1229,6 +1271,10 @@ def console_interface():
     print("🔗 Box, iCloud и другие облачные сервисы")
     print("💾 Ссылки сохраняются в файл cloud_links.txt")
     
+    print("🚄 МНОГОПОТОЧНОЕ СКАЧИВАНИЕ:")
+    print("   ⚡ До 3 потоков одновременно для максимальной скорости")
+    print("   📊 Прогресс отображается в реальном времени")
+    
     # Показываем статус автоскачивания
     if CLOUD_AUTO_ENABLED:
         print("🚀 АВТОСКАЧИВАНИЕ ОБЛАЧНЫХ ФАЙЛОВ: ✅ ВКЛЮЧЕНО")
@@ -1237,7 +1283,7 @@ def console_interface():
         print("⚠️ АВТОСКАЧИВАНИЕ ОБЛАЧНЫХ ФАЙЛОВ: ❌ ОТКЛЮЧЕНО")
         print("   💡 Для включения добавьте файл cloud_downloader.py")
         
-    print("="*65)
+    print("="*67)
     
     while True:
         try:

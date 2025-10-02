@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KemonoDownloader GUI v2.6 Cloud Auto - Универсальный поиск + автоскачивание облаков
-Новое в v2.6:
-- УНИВЕРСАЛЬНЫЙ поиск ВСЕХ типов файлов (61 формат)
+KemonoDownloader GUI v2.7 Multithread - Универсальный поиск + многопоточное скачивание
+Новое в v2.7:
+- МНОГОПОТОЧНОЕ СКАЧИВАНИЕ! До 3х потоков одновременно
 - АВТОМАТИЧЕСКОЕ СКАЧИВАНИЕ ИЗ ОБЛАЧНЫХ ХРАНИЛИЩ!
+- УНИВЕРСАЛЬНЫЙ поиск ВСЕХ типов файлов (61 формат)
 - Поддержка Google Drive, MEGA, Dropbox, MediaFire
 - Поддержка 3D моделей: GLB, GLTF, BLEND, FBX, OBJ
 - Расширенный поиск архивов, документов, аудио
 - Unity ресурсы: UNITY, UNITYPACKAGE, PREFAB
 - Текстуры и материалы: DDS, HDR, EXR, MAT
-- Автоматическое определение типов файлов
 - Облачные файлы сохраняются в папку cloud_files/
-- Улучшенная статистика скачивания
+- Значительно увеличена скорость скачивания
 """
 
 import sys
@@ -296,7 +296,7 @@ class KemonoDownloaderGUI(QMainWindow):
         self.load_settings()
         
     def init_ui(self):
-        self.setWindowTitle("🦊 KemonoDownloader GUI v2.6 Cloud Auto")
+        self.setWindowTitle("🦊 KemonoDownloader GUI v2.7 Multithread")
         self.setGeometry(100, 100, 800, 700)
         
         # Центральный виджет
@@ -305,7 +305,7 @@ class KemonoDownloaderGUI(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # Заголовок
-        title = QLabel("🦊 KemonoDownloader GUI v2.6 Cloud Auto")
+        title = QLabel("🦊 KemonoDownloader GUI v2.7 Multithread")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = QFont()
         title_font.setPointSize(18)
@@ -1072,7 +1072,7 @@ class KemonoDownloaderGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("KemonoDownloader GUI v2.6 Cloud Auto")
+    app.setApplicationName("KemonoDownloader GUI v2.7 Multithread")
     
     # Создаем окно (тема будет применена в load_settings)
     window = KemonoDownloaderGUI()
