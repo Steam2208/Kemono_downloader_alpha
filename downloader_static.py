@@ -718,9 +718,13 @@ def save_download_progress(save_dir, progress):
     except Exception as e:
         print(f"⚠️ Ошибка сохранения прогресса: {e}")
 
-def download_files_parallel(media_links, save_dir, progress_data=None, max_workers=4):
+def download_files_parallel(media_links, save_dir, progress_data=None, max_workers=4, 
+                           thread_callback=None, overall_callback=None, stop_check=None):
     """
     Скачивает файлы параллельно в несколько потоков
+    thread_callback(thread_id, filename, progress, max_progress) - для обновления прогресса потоков
+    overall_callback(current, total) - для обновления общего прогресса
+    stop_check() - функция для проверки нужно ли остановить скачивание
     """
     if not media_links:
         return 0
@@ -735,7 +739,28 @@ def download_files_parallel(media_links, save_dir, progress_data=None, max_worke
     def download_with_progress(args):
         nonlocal completed_files, success_count
         url, index = args
+        thread_id = index % max_workers  # Логический ID потока (0-4)
         
+        # Проверяем нужно ли остановиться
+        if stop_check and stop_check():
+            return False
+        
+        # Получаем имя файла для отображения
+        if '?f=' in url:
+            filename = url.split('?f=')[-1]
+        else:
+            filename = url.split('/')[-1].split('?')[0]
+        
+        # Уведомляем GUI о начале скачивания файла в потоке
+        if thread_callback:
+            thread_callback(thread_id, filename, 0, 100)
+            
+        print(f"🔄 Поток-{thread_id}: Начинаем {filename[:40]}...")
+        
+        # Проверяем еще раз перед скачиванием
+        if stop_check and stop_check():
+            return False
+            
         result = download_file(url, save_dir, progress_data)
         
         with lock:
@@ -743,7 +768,16 @@ def download_files_parallel(media_links, save_dir, progress_data=None, max_worke
             if result:
                 success_count += 1
             
-            print(f"📥 [{completed_files}/{total_count}] {'✅' if result else '❌'} {url.split('/')[-1].split('?')[0][:50]}")
+            # Обновляем общий прогресс
+            if overall_callback:
+                overall_callback(completed_files, total_count)
+            
+            # Завершаем прогресс потока
+            if thread_callback:
+                thread_callback(thread_id, filename, 100, 100)
+            
+            status = '✅' if result else '❌'
+            print(f"📥 [{completed_files}/{total_count}] Поток-{thread_id}: {status} {filename[:40]}")
         
         return result
     
@@ -809,19 +843,30 @@ def download_file(url, save_dir, progress_data=None):
                 os.remove(filepath)
         
         # Пробуем скачать с оригинального URL
+        start_time = time.time()
         response = requests.get(url, headers=HEADERS, verify=False, timeout=15, stream=True)
         
         if response.status_code == 200:
+            # Получаем размер файла если доступен
+            total_size = response.headers.get('content-length')
+            if total_size:
+                total_size = int(total_size)
+                print(f"    📊 Размер: {total_size / 1024 / 1024:.1f} MB")
+            
             with open(filepath, 'wb') as f:
+                downloaded = 0
                 for chunk in response.iter_content(chunk_size=65536):  # 64KB chunks для скорости
                     if chunk:
                         f.write(chunk)
+                        downloaded += len(chunk)
             
             file_size = os.path.getsize(filepath)
+            download_time = time.time() - start_time
+            speed_mbps = (file_size / 1024 / 1024) / download_time if download_time > 0 else 0
             
             # Проверяем что файл скачался полностью
             if is_file_complete(filepath):
-                print(f"    ✅ Скачано: {safe_filename} ({file_size} байт)")
+                print(f"    ✅ Скачано: {safe_filename} ({file_size / 1024 / 1024:.1f} MB, {speed_mbps:.1f} MB/s)")
                 
                 # Обновляем прогресс
                 if progress_data:
@@ -1110,7 +1155,7 @@ def download_post_media(post_url, save_dir, progress_data=None):
         print(f"  📁 Найдено файлов: {len(media_links)}")
         
         # Многопоточное скачивание
-        success_count = download_files_parallel(media_links, save_dir, progress_data, max_workers=5)
+        success_count = download_files_parallel(media_links, save_dir, progress_data, max_workers=3)
         
         # Отмечаем пост как завершенный
         if progress_data:
@@ -1258,7 +1303,7 @@ def console_interface():
     print("💾 Ссылки сохраняются в файл cloud_links.txt")
     
     print("🚄 МНОГОПОТОЧНОЕ СКАЧИВАНИЕ:")
-    print("   ⚡ До 5 потоков одновременно для максимальной скорости")
+    print("   ⚡ До 3 потоков одновременно для стабильной скорости")
     print("   📊 Прогресс отображается в реальном времени")
     
     # Показываем статус автоскачивания

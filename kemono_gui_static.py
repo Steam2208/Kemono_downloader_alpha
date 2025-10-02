@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KemonoDownloader GUI v2.7 Multithread - Универсальный поиск + многопоточное скачивание
-Новое в v2.7:
-- **До 5 потоков одновременно** для максимальной скорости
+KemonoDownloader GUI v2.7 Progress - Многопоточное скачивание с визуализацией
+Новое в v2.7 Progress:
+- 📊 Визуализация прогресса каждого потока в реальном времени
+- 🚄 Прогресс-бары для всех 5 потоков скачивания  
+- 📈 Общий прогресс-бар скачивания файлов
+- 🔍 Чистый лог только с ошибками и важными сообщениями
+- ⚡ 5 потоков одновременно для максимальной скорости
 - АВТОМАТИЧЕСКОЕ СКАЧИВАНИЕ ИЗ ОБЛАЧНЫХ ХРАНИЛИЩ!
 - УНИВЕРСАЛЬНЫЙ поиск ВСЕХ типов файлов (61 формат)
 - Поддержка Google Drive, MEGA, Dropbox, MediaFire
 - Поддержка 3D моделей: GLB, GLTF, BLEND, FBX, OBJ
-- Расширенный поиск архивов, документов, аудио
 - Unity ресурсы: UNITY, UNITYPACKAGE, PREFAB
-- Текстуры и материалы: DDS, HDR, EXR, MAT
 - Облачные файлы сохраняются в ту же папку, что и медиа
-- Значительно увеличена скорость скачивания
 """
 
 import sys
@@ -32,7 +33,8 @@ sys.path.append(os.path.dirname(__file__))
 from downloader_static import (get_creator_posts, get_post_media, download_file, 
                               load_download_progress, save_download_progress, 
                               download_creator_posts, show_download_status,
-                              detect_cloud_links, download_cloud_files)
+                              detect_cloud_links, download_cloud_files,
+                              download_files_parallel)
 import requests
 import urllib3
 import hashlib
@@ -43,7 +45,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class DownloaderWorker(QThread):
     """Рабочий поток для скачивания"""
     progress = pyqtSignal(int, int)  # текущий, всего
-    log = pyqtSignal(str)
+    thread_progress = pyqtSignal(int, str, int, int)  # thread_id, filename, current, total 
+    overall_progress = pyqtSignal(int, int)  # completed_files, total_files
+    log = pyqtSignal(str)  # только ошибки и важные сообщения
     finished = pyqtSignal(int)  # количество скачанных файлов
     
     def __init__(self, creator_url, settings):
@@ -186,71 +190,72 @@ class DownloaderWorker(QThread):
             
             self.log.emit(f"📋 К обработке: {len(pending_posts)} новых постов (из {len(posts)} общих)")
             
-            # Многопоточная обработка постов
+            # НОВАЯ ЛОГИКА: Сначала собираем ВСЕ файлы, потом скачиваем массово
             total_downloaded = len(progress_data.get('completed_files', {}))  # Уже скачанные файлы
             
-            self.log.emit(f"� Начинаем многопоточную обработку {len(pending_posts)} постов")
+            self.log.emit(f"🔍 Шаг 1: Собираем файлы из {len(pending_posts)} постов...")
+            
+            # Собираем все файлы из всех постов
+            all_media_links = []
+            processed_posts = []
             
             for i, post_url in enumerate(pending_posts):
                 if not self.running:
                     break
                     
                 self.progress.emit(i, len(pending_posts))
+                self.log.emit(f"📄 [{i + 1}/{len(pending_posts)}] Анализируем пост...")
                     
                 try:
-                    # Создаем ID поста для отслеживания
                     post_id = hashlib.md5(post_url.encode()).hexdigest()
                     
-                    self.log.emit(f"📄 [{i + 1}/{len(pending_posts)}] Обрабатываем пост...")
-                    
-                    # Используем рабочий метод получения медиа
+                    # Получаем файлы из поста
                     media_links = get_post_media(post_url, enhanced_search=True, save_dir=save_dir)
                     
                     if media_links:
-                        self.log.emit(f"   Найдено {len(media_links)} файлов")
-                        
-                        post_files_downloaded = 0
-                        for j, link in enumerate(media_links):
-                            if not self.running:
-                                break
-                                
-                            # Получаем имя файла
-                            if '?f=' in link:
-                                filename = link.split('?f=')[-1]
-                            else:
-                                filename = link.split('/')[-1].split('?')[0]
-                            
-                            # Скачиваем файл с поддержкой прогресса
-                            success = download_file(link, save_dir, progress_data)
-                            if success:
-                                total_downloaded += 1
-                                post_files_downloaded += 1
-                                self.log.emit(f"   ✅ {filename}")
-                            else:
-                                self.log.emit(f"   ❌ Ошибка: {filename}")
-                            
-                            # Пауза убрана для скорости
-                        
-                        # Облачные файлы уже обрабатываются в get_post_media
-                        
-                        # Отмечаем пост как завершенный
-                        if 'completed_posts' not in progress_data:
-                            progress_data['completed_posts'] = []
-                        
-                        progress_data['completed_posts'].append(post_id)
-                        save_download_progress(save_dir, progress_data)
-                        
-                        self.log.emit(f"   📄 Пост завершен: {post_files_downloaded} файлов")
+                        self.log.emit(f"   📎 Найдено {len(media_links)} файлов")
+                        all_media_links.extend(media_links)
+                        processed_posts.append(post_id)
                     else:
                         self.log.emit(f"   ⚠️ Медиа не найдено")
-                        # Все равно отмечаем как обработанный
-                        if 'completed_posts' not in progress_data:
-                            progress_data['completed_posts'] = []
-                        progress_data['completed_posts'].append(post_id)
-                        save_download_progress(save_dir, progress_data)
+                        processed_posts.append(post_id)  # Все равно отмечаем как обработанный
                         
                 except Exception as e:
                     self.log.emit(f"❌ Ошибка поста {i + 1}: {e}")
+            
+            # Проверяем, есть ли файлы для скачивания
+            if not all_media_links:
+                self.log.emit("⚠️ Не найдено файлов для скачивания")
+                # Отмечаем все посты как завершенные
+                if 'completed_posts' not in progress_data:
+                    progress_data['completed_posts'] = []
+                progress_data['completed_posts'].extend(processed_posts)
+                save_download_progress(save_dir, progress_data)
+            else:
+                # Получаем количество потоков из настроек
+                max_workers = self.settings.get('threads_count', 5)
+                self.log.emit(f"🚀 Шаг 2: Многопоточное скачивание {len(all_media_links)} файлов в {max_workers} потоков!")
+                
+                # МАССОВОЕ многопоточное скачивание ВСЕХ файлов
+                downloaded_count = download_files_parallel(
+                    all_media_links, 
+                    save_dir, 
+                    progress_data, 
+                    max_workers=max_workers,
+                    thread_callback=self.thread_progress.emit,
+                    overall_callback=self.overall_progress.emit,
+                    stop_check=lambda: not self.running
+                )
+                
+                total_downloaded += downloaded_count
+                
+                # Отмечаем все посты как завершенные
+                if 'completed_posts' not in progress_data:
+                    progress_data['completed_posts'] = []
+                progress_data['completed_posts'].extend(processed_posts)
+                save_download_progress(save_dir, progress_data)
+                
+                self.log.emit(f"✅ Массовое скачивание завершено: {downloaded_count} файлов")
             
             if self.running:
                 self.log.emit(f"\n🎉 ЗАВЕРШЕНО! Скачано {total_downloaded} файлов")
@@ -273,124 +278,234 @@ class KemonoDownloaderGUI(QMainWindow):
         self.load_settings()
         
     def init_ui(self):
-        self.setWindowTitle("🦊 KemonoDownloader GUI v2.7 Multithread")
-        self.setGeometry(100, 100, 800, 700)
+        self.setWindowTitle("KemonoDownloader v2.7")
+        self.setGeometry(100, 100, 700, 580)
         
         # Центральный виджет
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
         
-        # Заголовок
-        title = QLabel("🦊 KemonoDownloader GUI v2.7 Multithread")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_font = QFont()
-        title_font.setPointSize(18)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setStyleSheet("QLabel { color: #4fc3f7; padding: 15px; }")
-        layout.addWidget(title)
-        
-        # Группа настроек URL
-        url_group = QGroupBox("📝 URL автора")
+        # URL ввод
+        url_group = QGroupBox("URL автора")
         url_layout = QVBoxLayout(url_group)
+        url_layout.setContentsMargins(8, 16, 8, 8)
+        url_layout.setSpacing(4)
         
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("https://kemono.cr/patreon/user/12345678")
+        self.url_input.setFixedHeight(32)
         url_layout.addWidget(self.url_input)
         
         layout.addWidget(url_group)
         
-        # Группа настроек скачивания
-        settings_group = QGroupBox("⚙️ Настройки")
+        # Настройки
+        settings_group = QGroupBox("Настройки")
         settings_layout = QGridLayout(settings_group)
+        settings_layout.setContentsMargins(8, 16, 8, 8)
+        settings_layout.setHorizontalSpacing(8)
+        settings_layout.setVerticalSpacing(6)
         
-        # Папка загрузок
-        settings_layout.addWidget(QLabel("📁 Папка загрузок:"), 0, 0)
+        # --- Современная секция выбора папки ---
+        folder_label = QLabel("Папка:")
+        folder_label.setMinimumWidth(50)
+        settings_layout.addWidget(folder_label, 0, 0)
+
         self.download_dir_input = QLineEdit()
         self.download_dir_input.setText(os.path.join(os.getcwd(), "downloads"))
+        self.download_dir_input.setMinimumHeight(32)
+        self.download_dir_input.setMinimumWidth(350)
+        self.download_dir_input.setStyleSheet("QLineEdit { font-size: 12px; padding-left: 10px; padding-right: 10px; }")
         settings_layout.addWidget(self.download_dir_input, 0, 1)
-        
-        self.browse_btn = QPushButton("📂 Обзор")
+
+        self.browse_btn = QPushButton("Обзор")
+        self.browse_btn.setMinimumHeight(32)
+        self.browse_btn.setMinimumWidth(70)
+        self.browse_btn.setStyleSheet("QPushButton { font-size: 12px; padding: 0 12px; }")
         self.browse_btn.clicked.connect(self.browse_directory)
         settings_layout.addWidget(self.browse_btn, 0, 2)
         
         # Лимит постов
-        settings_layout.addWidget(QLabel("🎯 Лимит постов (0 = все):"), 1, 0)
+        settings_layout.addWidget(QLabel("Лимит:"), 1, 0)
         self.post_limit_input = QSpinBox()
         self.post_limit_input.setRange(0, 10000)
         self.post_limit_input.setValue(0)
-        self.post_limit_input.setSpecialValueText("Все посты")
+        self.post_limit_input.setSpecialValueText("Все")
+        self.post_limit_input.setFixedHeight(28)
         self.post_limit_input.valueChanged.connect(self.save_settings)
         settings_layout.addWidget(self.post_limit_input, 1, 1)
         
+        # Количество потоков
+        settings_layout.addWidget(QLabel("Потоки:"), 2, 0)
+        self.threads_count_input = QSpinBox()
+        self.threads_count_input.setRange(1, 10)
+        self.threads_count_input.setValue(5)
+        self.threads_count_input.setFixedHeight(28)
+        self.threads_count_input.valueChanged.connect(self.update_thread_bars)
+        self.threads_count_input.valueChanged.connect(self.save_settings)
+        settings_layout.addWidget(self.threads_count_input, 2, 1)
+        
         # Темная тема
-        settings_layout.addWidget(QLabel("🌙 Темная тема:"), 2, 0)
-        self.dark_theme_checkbox = QCheckBox("Включено")
-        self.dark_theme_checkbox.setChecked(True)  # По умолчанию темная
+        settings_layout.addWidget(QLabel("Тема:"), 3, 0)
+        self.dark_theme_checkbox = QCheckBox("Темная")
+        self.dark_theme_checkbox.setChecked(True)
         self.dark_theme_checkbox.stateChanged.connect(self.toggle_theme)
-        settings_layout.addWidget(self.dark_theme_checkbox, 2, 1)
+        settings_layout.addWidget(self.dark_theme_checkbox, 3, 1)
         
         layout.addWidget(settings_group)
         
         # Кнопки управления
         buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(6)
         
-        self.start_btn = QPushButton("🚀 Начать скачивание")
+        self.start_btn = QPushButton("Скачать")
         self.start_btn.clicked.connect(self.start_download)
         self.start_btn.setProperty("class", "success")
+        self.start_btn.setFixedHeight(32)
         buttons_layout.addWidget(self.start_btn)
         
-        self.stop_btn = QPushButton("⏹️ Остановить")
+        self.stop_btn = QPushButton("Стоп")
         self.stop_btn.clicked.connect(self.stop_download)
         self.stop_btn.setEnabled(False)
         self.stop_btn.setProperty("class", "danger")
+        self.stop_btn.setFixedHeight(32)
         buttons_layout.addWidget(self.stop_btn)
         
-        self.open_folder_btn = QPushButton("📂 Открыть папку")
+        self.open_folder_btn = QPushButton("Папка")
         self.open_folder_btn.clicked.connect(self.open_download_folder)
         self.open_folder_btn.setProperty("class", "primary")
+        self.open_folder_btn.setFixedHeight(32)
         buttons_layout.addWidget(self.open_folder_btn)
         
-        self.status_btn = QPushButton("📊 Статус загрузки")
+        self.status_btn = QPushButton("Статус")
         self.status_btn.clicked.connect(self.show_download_status)
         self.status_btn.setProperty("class", "info")
+        self.status_btn.setFixedHeight(32)
         buttons_layout.addWidget(self.status_btn)
         
-        self.formats_btn = QPushButton("📋 Форматы файлов")
+        self.formats_btn = QPushButton("Форматы")
         self.formats_btn.clicked.connect(self.show_supported_formats)
         self.formats_btn.setProperty("class", "primary")
+        self.formats_btn.setFixedHeight(32)
         buttons_layout.addWidget(self.formats_btn)
         
         layout.addLayout(buttons_layout)
         
         # Прогресс
-        progress_group = QGroupBox("📊 Прогресс")
-        progress_layout = QVBoxLayout(progress_group)
+        progress_group = QGroupBox("Прогресс")
+        progress_main_layout = QVBoxLayout(progress_group)
+        progress_main_layout.setContentsMargins(8, 16, 8, 8)
+        progress_main_layout.setSpacing(4)
         
-        # Прогресс постов
-        self.post_progress_label = QLabel("Посты: 0 / 0")
-        progress_layout.addWidget(self.post_progress_label)
+        # Горизонтальная компоновка
+        progress_horizontal = QHBoxLayout()
+        progress_horizontal.setSpacing(12)
+        
+        # Основные прогресс-бары
+        main_progress_container = QWidget()
+        main_progress_layout = QVBoxLayout(main_progress_container)
+        main_progress_layout.setContentsMargins(0, 0, 0, 0)
+        main_progress_layout.setSpacing(4)
+        
+        # Файлы
+        self.overall_progress_label = QLabel("Файлы: 0/0")
+        main_progress_layout.addWidget(self.overall_progress_label)
+        
+        self.overall_progress = QProgressBar()
+        self.overall_progress.setFixedHeight(18)
+        main_progress_layout.addWidget(self.overall_progress)
+        
+        # Посты
+        self.post_progress_label = QLabel("Посты: 0/0") 
+        main_progress_layout.addWidget(self.post_progress_label)
         
         self.post_progress = QProgressBar()
-        progress_layout.addWidget(self.post_progress)
+        self.post_progress.setFixedHeight(18)
+        main_progress_layout.addWidget(self.post_progress)
+        
+        progress_horizontal.addWidget(main_progress_container)
+        
+        # Потоки
+        threads_container = QWidget()
+        threads_layout = QVBoxLayout(threads_container)
+        threads_layout.setContentsMargins(0, 0, 0, 0)
+        threads_layout.setSpacing(2)
+        
+        threads_label = QLabel("Потоки:")
+        threads_label.setFixedHeight(14)
+        threads_layout.addWidget(threads_label)
+        
+        self.threads_bars_container = QWidget()
+        self.threads_bars_layout = QHBoxLayout(self.threads_bars_container)
+        self.threads_bars_layout.setContentsMargins(0, 0, 0, 0)
+        self.threads_bars_layout.setSpacing(3)
+        
+        self.thread_progress_bars = []
+        self.thread_labels = []
+        
+        self.create_thread_bars(5)
+        
+        threads_layout.addWidget(self.threads_bars_container)
+        progress_horizontal.addWidget(threads_container)
+        
+        # Добавляем горизонтальную компоновку в основной layout
+        progress_main_layout.addLayout(progress_horizontal)
         
         layout.addWidget(progress_group)
         
         # Лог
-        log_group = QGroupBox("📋 Лог скачивания")
+        log_group = QGroupBox("Лог")
         log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(8, 16, 8, 8)
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(250)
+        self.log_text.setFixedHeight(120)
         log_layout.addWidget(self.log_text)
         
         layout.addWidget(log_group)
         
         # Статус бар
-        self.statusBar().showMessage("Готов к работе")
+        self.statusBar().showMessage("Готов")
     
+    def create_thread_bars(self, count):
+        """Создает указанное количество прогресс-баров потоков"""
+        self.clear_thread_bars()
+        
+        for i in range(count):
+            thread_progress = QProgressBar()
+            thread_progress.setOrientation(Qt.Orientation.Vertical)
+            thread_progress.setFixedWidth(8)
+            thread_progress.setFixedHeight(44)
+            thread_progress.setTextVisible(False)
+            thread_progress.setValue(0)
+            thread_progress.setMaximum(100)
+            self.thread_progress_bars.append(thread_progress)
+            
+            thread_label = QLabel("Ожидание...")
+            thread_label.setVisible(False)
+            self.thread_labels.append(thread_label)
+            
+            self.threads_bars_layout.addWidget(thread_progress)
+    
+    def clear_thread_bars(self):
+        """Удаляет все существующие прогресс-бары потоков"""
+        # Удаляем виджеты из layout и памяти
+        for progress_bar in self.thread_progress_bars:
+            self.threads_bars_layout.removeWidget(progress_bar)
+            progress_bar.deleteLater()
+        
+        # Очищаем списки
+        self.thread_progress_bars.clear()
+        self.thread_labels.clear()
+    
+    def update_thread_bars(self):
+        """Обновляет количество прогресс-баров потоков согласно настройке"""
+        new_count = self.threads_count_input.value()
+        self.create_thread_bars(new_count)
+
     def load_settings(self):
         """Загружает сохраненные настройки"""
         self.download_dir_input.setText(
@@ -399,6 +514,11 @@ class KemonoDownloaderGUI(QMainWindow):
         self.post_limit_input.setValue(
             int(self.settings.value("post_limit", 0))
         )
+        
+        # Загружаем количество потоков
+        threads_count = int(self.settings.value("threads_count", 5))
+        self.threads_count_input.setValue(threads_count)
+        self.create_thread_bars(threads_count)  # Создаем нужное количество баров
         
         # Загружаем настройку темы
         dark_theme = self.settings.value("dark_theme", True, type=bool)
@@ -409,6 +529,7 @@ class KemonoDownloaderGUI(QMainWindow):
         """Сохраняет текущие настройки"""
         self.settings.setValue("download_dir", self.download_dir_input.text())
         self.settings.setValue("post_limit", self.post_limit_input.value())
+        self.settings.setValue("threads_count", self.threads_count_input.value())
         self.settings.setValue("dark_theme", self.dark_theme_checkbox.isChecked())
     
     def closeEvent(self, event):
@@ -460,38 +581,41 @@ class KemonoDownloaderGUI(QMainWindow):
         QApplication.instance().setStyleSheet(self.get_light_theme_style())
     
     def get_dark_theme_style(self):
-        """Возвращает CSS для темной темы"""
+        """Возвращает CSS для темной минималистичной темы"""
         return """
-        /* Основная темная тема */
+        /* Минималистичная темная тема - осветленная */
         QMainWindow {
-            background-color: #2b2b2b;
+            background-color: #2d2d2d;
             color: #ffffff;
         }
         
         QWidget {
-            background-color: #2b2b2b;
+            background-color: #2d2d2d;
             color: #ffffff;
         }
         
-        /* Группы */
+        /* Группы - минималистичный стиль без фона */
         QGroupBox {
-            font-weight: bold;
+            font-weight: 500;
             color: #ffffff;
-            border: 2px solid #555555;
-            border-radius: 8px;
-            margin-top: 1ex;
-            padding-top: 12px;
-            background-color: #3a3a3a;
+            border: 1px solid #404040;
+            border-radius: 4px;
+            margin-top: 12px;
+            padding-top: 16px;
+            padding-bottom: 8px;
+            background-color: transparent;
+            font-size: 11px;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 8px 0 8px;
-            color: #4fc3f7;
+            left: 8px;
+            padding: 2px 6px 2px 6px;
+            color: #ffffff;
+            background-color: #2d2d2d;
         }
         
         /* Поля ввода */
-        QLineEdit, QSpinBox, QDoubleSpinBox {
+        QLineEdit {
             background-color: #404040;
             border: 2px solid #555555;
             border-radius: 6px;
@@ -499,9 +623,50 @@ class KemonoDownloaderGUI(QMainWindow):
             color: #ffffff;
             font-size: 10pt;
         }
-        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+        QLineEdit:focus {
             border-color: #4fc3f7;
             background-color: #4a4a4a;
+        }
+        
+        /* SpinBox - современный стиль для темной темы */
+        QSpinBox, QDoubleSpinBox {
+            border: 1px solid #555;
+            border-radius: 8px;
+            background-color: #2a2a2a;
+            color: white;
+            padding: 5px;
+            font-size: 12px;
+        }
+        QSpinBox:focus, QDoubleSpinBox:focus {
+            border-color: #4fc3f7;
+            background-color: #3a3a3a;
+        }
+        QSpinBox::up-button, QSpinBox::down-button,
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+            border: none;
+            background-color: #444;
+            width: 16px;
+            border-radius: 4px;
+        }
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+        QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
+            background-color: #555;
+        }
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-bottom: 4px solid #00aaff;
+            width: 0px;
+            height: 0px;
+        }
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 4px solid #00aaff;
+            width: 0px;
+            height: 0px;
         }
         
         /* Чекбоксы */
@@ -547,269 +712,321 @@ class KemonoDownloaderGUI(QMainWindow):
             border-color: #444444;
         }
         
-        /* Прогресс бары */
+        /* Прогресс бары - минималистичные */
         QProgressBar {
-            background-color: #404040;
-            border: 2px solid #555555;
-            border-radius: 6px;
+            border: 1px solid #505050;
+            border-radius: 1px;
+            background-color: #3a3a3a;
             text-align: center;
             color: #ffffff;
-            font-weight: bold;
+            font-size: 9px;
         }
         QProgressBar::chunk {
-            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4fc3f7, stop:1 #29b6f6);
-            border-radius: 4px;
+            background-color: #0078d4;
+            border-radius: 0px;
         }
         
-        /* Текстовые области */
+        /* Текстовые области - минималистичные с легким фоном */
         QTextEdit {
-            background-color: #1e1e1e;
-            border: 2px solid #555555;
-            border-radius: 6px;
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid #404040;
+            border-radius: 2px;
             color: #ffffff;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 9pt;
-            padding: 5px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 10px;
+            padding: 8px;
+            margin: 2px;
+            line-height: 1.3;
         }
         
-        /* Labels */
+        /* Labels - минималистичные */
         QLabel {
             color: #ffffff;
-            font-size: 10pt;
+            font-size: 10px;
         }
         
-        /* Статус бар */
+        /* Статус бар - минималистичный */
         QStatusBar {
             background-color: #3a3a3a;
             color: #ffffff;
-            border-top: 1px solid #555555;
+            border-top: 1px solid #404040;
+            font-size: 9px;
         }
         
-        /* Скроллбары */
+        /* Скроллбары - минималистичные */
         QScrollBar:vertical {
-            background-color: #404040;
-            width: 12px;
-            border-radius: 6px;
+            background-color: #2a2a2a;
+            width: 10px;
+            border-radius: 0px;
         }
         QScrollBar::handle:vertical {
-            background-color: #666666;
-            border-radius: 6px;
+            background-color: #505050;
+            border-radius: 0px;
             min-height: 20px;
         }
         QScrollBar::handle:vertical:hover {
-            background-color: #777777;
+            background-color: #606060;
         }
         
-        /* Специальные стили для цветных кнопок */
+        /* Специальные стили для цветных кнопок - минималистичные */
         QPushButton[class="success"] {
-            background-color: #2e7d32;
-            border-color: #4caf50;
+            background-color: #107c10;
+            border-color: #107c10;
         }
         QPushButton[class="success"]:hover {
-            background-color: #388e3c;
+            background-color: #0e6e0e;
         }
         
         QPushButton[class="danger"] {
-            background-color: #c62828;
-            border-color: #f44336;
+            background-color: #d13438;
+            border-color: #d13438;
         }
         QPushButton[class="danger"]:hover {
-            background-color: #d32f2f;
+            background-color: #b92b2b;
         }
         
         QPushButton[class="primary"] {
-            background-color: #1565c0;
-            border-color: #2196f3;
+            background-color: #0078d4;
+            border-color: #0078d4;
         }
         QPushButton[class="primary"]:hover {
-            background-color: #1976d2;
+            background-color: #106ebe;
         }
         
         QPushButton[class="info"] {
-            background-color: #0288d1;
-            border-color: #03a9f4;
+            background-color: #0078d4;
+            border-color: #0078d4;
         }
         QPushButton[class="info"]:hover {
-            background-color: #0277bd;
+            background-color: #106ebe;
         }
         """
     
     def get_light_theme_style(self):
-        """Возвращает CSS для светлой темы"""
+        """Возвращает CSS для светлой минималистичной темы"""
         return """
-        /* Основная светлая тема */
+        /* Минималистичная светлая тема */
         QMainWindow {
-            background-color: #f5f5f5;
+            background-color: #fafafa;
             color: #000000;
         }
         
         QWidget {
-            background-color: #f5f5f5;
+            background-color: #fafafa;
             color: #000000;
         }
         
-        /* Группы */
+        /* Группы - минималистичный стиль без фона */
         QGroupBox {
-            font-weight: bold;
+            font-weight: 500;
             color: #000000;
-            border: 2px solid #cccccc;
-            border-radius: 8px;
-            margin-top: 1ex;
-            padding-top: 12px;
-            background-color: #ffffff;
+            border: 1px solid #d0d0d0;
+            border-radius: 4px;
+            margin-top: 12px;
+            padding-top: 16px;
+            padding-bottom: 8px;
+            background-color: transparent;
+            font-size: 11px;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 8px 0 8px;
-            color: #1976d2;
-        }
-        
-        /* Поля ввода */
-        QLineEdit, QSpinBox, QDoubleSpinBox {
-            background-color: #ffffff;
-            border: 2px solid #ddd;
-            border-radius: 6px;
-            padding: 8px;
+            left: 8px;
+            padding: 2px 6px 2px 6px;
             color: #000000;
-            font-size: 10pt;
-        }
-        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-            border-color: #1976d2;
-            background-color: #f8f9fa;
+            background-color: #fafafa;
         }
         
-        /* Чекбоксы */
+        /* Поля ввода - минималистичные с легким фоном */
+        QLineEdit {
+            background-color: rgba(0, 0, 0, 0.02);
+            border: 1px solid #d0d0d0;
+            border-radius: 2px;
+            padding: 10px 12px;
+            margin: 2px;
+            color: #000000;
+            font-size: 11px;
+            min-height: 16px;
+        }
+        QLineEdit:focus {
+            border-color: #0078d4;
+            background-color: rgba(0, 0, 0, 0.04);
+        }
+        
+        /* SpinBox - минималистичный светлый стиль */
+        QSpinBox, QDoubleSpinBox {
+            border: 1px solid #d0d0d0;
+            border-radius: 2px;
+            background-color: #ffffff;
+            color: black;
+            padding: 4px 6px;
+            font-size: 10px;
+        }
+        QSpinBox:focus, QDoubleSpinBox:focus {
+            border-color: #0078d4;
+            background-color: #ffffff;
+        }
+        QSpinBox::up-button, QSpinBox::down-button,
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+            border: none;
+            background-color: #e8e8e8;
+            width: 14px;
+            border-radius: 1px;
+        }
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+        QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
+            background-color: #d8d8d8;
+        }
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+            image: none;
+            border-left: 3px solid transparent;
+            border-right: 3px solid transparent;
+            border-bottom: 3px solid #000000;
+            width: 0px;
+            height: 0px;
+        }
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+            image: none;
+            border-left: 3px solid transparent;
+            border-right: 3px solid transparent;
+            border-top: 3px solid #000000;
+            width: 0px;
+            height: 0px;
+        }
+        
+        /* Чекбоксы - минималистичные */
         QCheckBox {
             color: #000000;
-            font-size: 10pt;
+            font-size: 10px;
         }
         QCheckBox::indicator {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
         }
         QCheckBox::indicator:unchecked {
             background-color: #ffffff;
-            border: 2px solid #ddd;
-            border-radius: 3px;
+            border: 1px solid #d0d0d0;
+            border-radius: 2px;
         }
         QCheckBox::indicator:checked {
-            background-color: #1976d2;
-            border: 2px solid #1976d2;
-            border-radius: 3px;
+            background-color: #0078d4;
+            border: 1px solid #0078d4;
+            border-radius: 2px;
         }
         
-        /* Кнопки */
+        /* Кнопки - минималистичные */
         QPushButton {
             background-color: #ffffff;
-            border: 2px solid #ddd;
-            border-radius: 6px;
-            padding: 8px 15px;
+            border: 1px solid #d0d0d0;
+            border-radius: 2px;
+            padding: 6px 12px;
             color: #000000;
-            font-weight: bold;
-            font-size: 10pt;
+            font-weight: 400;
+            font-size: 10px;
         }
         QPushButton:hover {
             background-color: #f0f0f0;
-            border-color: #bbb;
+            border-color: #c0c0c0;
         }
         QPushButton:pressed {
-            background-color: #e0e0e0;
+            background-color: #e8e8e8;
         }
         QPushButton:disabled {
-            background-color: #f5f5f5;
+            background-color: #f8f8f8;
             color: #999999;
             border-color: #e0e0e0;
         }
         
-        /* Прогресс бары */
+        /* Прогресс бары - минималистичные */
         QProgressBar {
-            background-color: #ffffff;
-            border: 2px solid #ddd;
-            border-radius: 6px;
+            border: 1px solid #d0d0d0;
+            border-radius: 1px;
+            background-color: #f8f8f8;
             text-align: center;
             color: #000000;
-            font-weight: bold;
+            font-size: 9px;
         }
         QProgressBar::chunk {
-            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1976d2, stop:1 #42a5f5);
-            border-radius: 4px;
+            background-color: #0078d4;
+            border-radius: 0px;
         }
         
-        /* Текстовые области */
+        /* Текстовые области - минималистичные с легким фоном */
         QTextEdit {
-            background-color: #ffffff;
-            border: 2px solid #ddd;
-            border-radius: 6px;
+            background-color: rgba(0, 0, 0, 0.01);
+            border: 1px solid #d0d0d0;
+            border-radius: 2px;
             color: #000000;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 9pt;
-            padding: 5px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 10px;
+            padding: 8px;
+            margin: 2px;
+            line-height: 1.3;
         }
         
-        /* Labels */
+        /* Labels - минималистичные */
         QLabel {
             color: #000000;
-            font-size: 10pt;
+            font-size: 10px;
         }
         
-        /* Статус бар */
+        /* Статус бар - минималистичный */
         QStatusBar {
-            background-color: #ffffff;
+            background-color: #f0f0f0;
             color: #000000;
-            border-top: 1px solid #ddd;
+            border-top: 1px solid #d0d0d0;
+            font-size: 9px;
         }
         
-        /* Скроллбары */
+        /* Скроллбары - минималистичные */
         QScrollBar:vertical {
-            background-color: #f0f0f0;
-            width: 12px;
-            border-radius: 6px;
+            background-color: #f8f8f8;
+            width: 10px;
+            border-radius: 0px;
         }
         QScrollBar::handle:vertical {
             background-color: #c0c0c0;
-            border-radius: 6px;
+            border-radius: 0px;
             min-height: 20px;
         }
         QScrollBar::handle:vertical:hover {
             background-color: #a0a0a0;
         }
         
-        /* Специальные стили для цветных кнопок */
+        /* Специальные стили для цветных кнопок - минималистичные */
         QPushButton[class="success"] {
-            background-color: #4caf50;
-            border-color: #4caf50;
+            background-color: #107c10;
+            border-color: #107c10;
             color: #ffffff;
         }
         QPushButton[class="success"]:hover {
-            background-color: #45a049;
+            background-color: #0e6e0e;
         }
         
         QPushButton[class="danger"] {
-            background-color: #f44336;
-            border-color: #f44336;
+            background-color: #d13438;
+            border-color: #d13438;
             color: #ffffff;
         }
         QPushButton[class="danger"]:hover {
-            background-color: #da190b;
+            background-color: #b92b2b;
         }
         
         QPushButton[class="primary"] {
-            background-color: #2196f3;
-            border-color: #2196f3;
+            background-color: #0078d4;
+            border-color: #0078d4;
             color: #ffffff;
         }
         QPushButton[class="primary"]:hover {
-            background-color: #0b7dda;
+            background-color: #106ebe;
         }
         
         QPushButton[class="info"] {
-            background-color: #03a9f4;
-            border-color: #03a9f4;
+            background-color: #0078d4;
+            border-color: #0078d4;
             color: #ffffff;
         }
         QPushButton[class="info"]:hover {
-            background-color: #0288d1;
+            background-color: #106ebe;
         }
         """
     
@@ -953,7 +1170,8 @@ class KemonoDownloaderGUI(QMainWindow):
         # Настройки
         settings = {
             'download_dir': download_dir,
-            'post_limit': self.post_limit_input.value() if self.post_limit_input.value() > 0 else None
+            'post_limit': self.post_limit_input.value() if self.post_limit_input.value() > 0 else None,
+            'threads_count': self.threads_count_input.value()
         }
         
         # Запускаем рабочий поток
@@ -961,6 +1179,8 @@ class KemonoDownloaderGUI(QMainWindow):
         self.worker.progress.connect(self.update_post_progress)
         self.worker.log.connect(self.add_log)
         self.worker.finished.connect(self.download_finished)
+        self.worker.thread_progress.connect(self.update_thread_progress)
+        self.worker.overall_progress.connect(self.update_overall_progress)
         
         self.worker.start()
         
@@ -979,17 +1199,61 @@ class KemonoDownloaderGUI(QMainWindow):
         self.post_progress.setMaximum(total)
         self.post_progress.setValue(current)
         self.post_progress_label.setText(f"Посты: {current} / {total}")
+    
+    def update_thread_progress(self, thread_id, filename, progress, max_progress):
+        """Обновляет прогресс конкретного потока (столбики всегда видны)"""
+        if 0 <= thread_id < len(self.thread_progress_bars):            
+            if max_progress > 0:
+                self.thread_progress_bars[thread_id].setMaximum(max_progress)
+                self.thread_progress_bars[thread_id].setValue(progress)
+            else:
+                self.thread_progress_bars[thread_id].setMaximum(1)
+                self.thread_progress_bars[thread_id].setValue(1)
+            
+            # Tooltip с номером потока и информацией о файле
+            short_filename = filename[:25] + "..." if len(filename) > 25 else filename
+            tooltip_text = f"Поток #{thread_id+1}\n{filename}\nПрогресс: {progress}%"
+            self.thread_progress_bars[thread_id].setToolTip(tooltip_text)
+            
+            # Обновляем скрытый label для данных
+            self.thread_labels[thread_id].setText(short_filename)
+    
+    def update_overall_progress(self, current, total):
+        """Обновляет общий прогресс скачивания файлов"""
+        if total > 0:
+            self.overall_progress.setMaximum(total)
+            self.overall_progress.setValue(current)
+        else:
+            self.overall_progress.setMaximum(1)
+            self.overall_progress.setValue(1)
         
+        self.overall_progress_label.setText(f"Файлы: {current} / {total}")
+        
+        # Принудительно обновляем до 100% если все файлы скачаны
+        if current >= total and total > 0:
+            self.overall_progress.setValue(total)  # Убеждаемся что показывает 100%
 
     def add_log(self, message):
-        self.log_text.append(message)
-        # Автоскролл вниз
-        scrollbar = self.log_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # Показываем только ошибки и важные сообщения
+        if any(keyword in message.lower() for keyword in ['ошибка', 'error', '❌', '✅ завершено', '🎯', '📋']):
+            self.log_text.append(message)
+            # Автоскролл вниз
+            scrollbar = self.log_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
         
     def download_finished(self, files_count):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        
+        # Принудительно завершаем общий прогресс на 100%
+        if self.overall_progress.maximum() > 0:
+            self.overall_progress.setValue(self.overall_progress.maximum())
+        
+        # Сбрасываем прогресс-бары потоков (оставляем видимыми)
+        for i, progress_bar in enumerate(self.thread_progress_bars):
+            progress_bar.setValue(0)
+            progress_bar.setToolTip("")  # Очищаем tooltip
+            self.thread_labels[i].setText("Ожидание...")
         
         if files_count > 0:
             self.statusBar().showMessage(f"Завершено! Скачано {files_count} файлов")
@@ -1010,7 +1274,7 @@ class KemonoDownloaderGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("KemonoDownloader GUI v2.7 Multithread")
+    app.setApplicationName("KemonoDownloader GUI v2.7 Progress")
     
     # Создаем окно (тема будет применена в load_settings)
     window = KemonoDownloaderGUI()

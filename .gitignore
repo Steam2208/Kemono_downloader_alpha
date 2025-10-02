@@ -1,27 +1,34 @@
-# Python
+﻿# Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-del-this-directory.txt
 
-# Build artifacts
+# PyInstaller
 build/
 *.spec
 
 # Downloads and temp files
 downloads/
-*.tmp
-*.log
-
-# IDE and OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-# KemonoDownloader specific
 *.kemono_progress.json
 cloud_links.txt
-cloud_downloads.log
 
-# Test files
-test_*
-*test*.py
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Logs
+*.log

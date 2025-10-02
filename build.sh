@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🦊 KemonoDownloader v2.7 Multithread - Build Script"
+echo "🦊 KemonoDownloader v2.7 Progress - Build Script"
 echo "===================================================="
 echo
 
@@ -26,23 +26,23 @@ rm -rf build/
 rm -f *.spec
 
 echo "🚀 Building GUI version..."
-pyinstaller --onefile --windowed --add-data "assets:assets" --add-data "cloud_downloader.py:." --icon="assets/icons/KemonoDownloader.ico" --name="KemonoDownloader_GUI_v2.7_Multithread" kemono_gui_static.py
+pyinstaller --onefile --windowed --add-data "assets:assets" --add-data "cloud_downloader.py:." --icon="assets/icons/KemonoDownloader.ico" --name="KemonoDownloader_GUI_v2.7_Progress" kemono_gui_static.py
 
 echo "🚀 Building Console version..."
-pyinstaller --onefile --console --add-data "assets:assets" --add-data "cloud_downloader.py:." --icon="assets/icons/KemonoDownloader.ico" --name="KemonoDownloader_Console_v2.7_Multithread" downloader_static.py
+pyinstaller --onefile --console --add-data "assets:assets" --add-data "cloud_downloader.py:." --icon="assets/icons/KemonoDownloader.ico" --name="KemonoDownloader_Console_v2.7_Progress" downloader_static.py
 
 echo
 echo "📋 Build Results:"
 echo "================="
 
-if [ -f "dist/KemonoDownloader_GUI_v2.7_Multithread" ]; then
-    echo "✅ GUI version: KemonoDownloader_GUI_v2.7_Multithread"
+if [ -f "dist/KemonoDownloader_GUI_v2.7_Progress" ]; then
+    echo "✅ GUI version: KemonoDownloader_GUI_v2.7_Progress"
 else
     echo "❌ GUI version: FAILED!"
 fi
 
-if [ -f "dist/KemonoDownloader_Console_v2.7_Multithread" ]; then
-    echo "✅ Console version: KemonoDownloader_Console_v2.7_Multithread"
+if [ -f "dist/KemonoDownloader_Console_v2.7_Progress" ]; then
+    echo "✅ Console version: KemonoDownloader_Console_v2.7_Progress"
 else
     echo "❌ Console version: FAILED!"
 fi
