@@ -100,7 +100,7 @@ class CloudDownloader:
     
     def _download_dropbox(self, url, save_dir, filename_hint=None):
         """
-        Скачивание файлов с Dropbox
+        Скачивание файлов с Dropbox (ИСПРАВЛЕНО: добавлено определение расширения)
         """
         print("📦 Dropbox: получаем прямую ссылку...")
         
@@ -123,7 +123,40 @@ class CloudDownloader:
             if not filename:
                 filename = f"dropbox_file_{int(time.time())}"
         
-        print(f"📄 Имя файла: {filename}")
+        # НОВОЕ: Если в имени файла нет расширения, пытаемся определить его
+        if '.' not in filename or filename.endswith('_'):
+            print(f"⚠️ Файл без расширения: {filename}, пытаемся определить...")
+            
+            try:
+                # Делаем HEAD запрос для получения заголовков
+                head_response = self.session.head(direct_url, timeout=10)
+                
+                if head_response.status_code == 200:
+                    # Пытаемся извлечь имя файла из заголовка Content-Disposition
+                    content_disposition = head_response.headers.get('Content-Disposition', '')
+                    if 'filename=' in content_disposition:
+                        cd_filename = content_disposition.split('filename=')[-1].strip('"\'')
+                        if cd_filename and '.' in cd_filename:
+                            filename = cd_filename
+                            print(f"✅ Имя файла из заголовка: {filename}")
+                    
+                    # Если все еще нет расширения, определяем по Content-Type
+                    if '.' not in filename:
+                        content_type = head_response.headers.get('Content-Type', '').lower()
+                        extension = self._get_extension_from_mime_type(content_type)
+                        if extension:
+                            filename += extension
+                            print(f"✅ Добавлено расширение по MIME: {filename}")
+                        else:
+                            filename += '.bin'  # Общее расширение для неизвестных файлов
+                            print(f"⚠️ Неизвестный тип файла, добавлено .bin: {filename}")
+                            
+            except Exception as e:
+                print(f"⚠️ Ошибка определения расширения: {e}")
+                if '.' not in filename:
+                    filename += '.bin'
+        
+        print(f"📄 Финальное имя файла: {filename}")
         
         return self._download_file(direct_url, save_dir, filename)
     
@@ -324,6 +357,60 @@ class CloudDownloader:
         except Exception as e:
             print(f"❌ Ошибка скачивания файла: {e}")
             return False
+    
+    def _get_extension_from_mime_type(self, mime_type):
+        """
+        НОВЫЙ: Определяет расширение файла по MIME-типу
+        """
+        mime_extensions = {
+            # Изображения
+            'image/jpeg': '.jpg',
+            'image/jpg': '.jpg', 
+            'image/png': '.png',
+            'image/gif': '.gif',
+            'image/webp': '.webp',
+            'image/bmp': '.bmp',
+            'image/tiff': '.tiff',
+            'image/svg+xml': '.svg',
+            
+            # Видео
+            'video/mp4': '.mp4',
+            'video/avi': '.avi',
+            'video/quicktime': '.mov',
+            'video/x-msvideo': '.avi',
+            'video/webm': '.webm',
+            'video/x-flv': '.flv',
+            
+            # Аудио
+            'audio/mpeg': '.mp3',
+            'audio/mp3': '.mp3',
+            'audio/wav': '.wav',
+            'audio/x-wav': '.wav',
+            'audio/flac': '.flac',
+            'audio/ogg': '.ogg',
+            
+            # Архивы
+            'application/zip': '.zip',
+            'application/x-zip-compressed': '.zip',
+            'application/x-rar-compressed': '.rar',
+            'application/x-7z-compressed': '.7z',
+            'application/x-tar': '.tar',
+            'application/gzip': '.gz',
+            
+            # Документы
+            'application/pdf': '.pdf',
+            'application/msword': '.doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+            'text/plain': '.txt',
+            'text/rtf': '.rtf',
+            
+            # 3D и прочее
+            'model/gltf+json': '.gltf',
+            'model/gltf-binary': '.glb',
+            'application/octet-stream': '.bin',  # Общий тип для неизвестных файлов
+        }
+        
+        return mime_extensions.get(mime_type.split(';')[0].strip(), None)
 
 def test_cloud_downloader():
     """

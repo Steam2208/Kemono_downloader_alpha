@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🦊 KemonoDownloader v2.8.1 Progress - Multi-threaded File Downloader
+🦊 KemonoDownloader v2.8.2 Progress - Multi-threaded File Downloader
 Новое в v2.7 Progress:
 - 📊 Визуализация прогресса каждого потока в реальном времени
 - 🚄 Прогресс-бары для всех 5 потоков скачивания  
@@ -278,7 +278,7 @@ class KemonoDownloaderGUI(QMainWindow):
         self.load_settings()
         
     def init_ui(self):
-        self.setWindowTitle("KemonoDownloader v2.7")
+        self.setWindowTitle("KemonoDownloader v2.8.2")
         self.setGeometry(100, 100, 700, 580)
         
         # Центральный виджет
@@ -1274,7 +1274,7 @@ class KemonoDownloaderGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("KemonoDownloader GUI v2.7 Progress")
+    app.setApplicationName("KemonoDownloader GUI v2.8.2 Progress")
     
     # Создаем окно (тема будет применена в load_settings)
     window = KemonoDownloaderGUI()

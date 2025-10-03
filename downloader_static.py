@@ -546,27 +546,20 @@ def get_post_media(post_url, enhanced_search=True, save_dir=None):
                     for service, count in cloud_stats.items():
                         print(f"      ☁️ {service}: {count}")
             
-            # Ищем ссылки на файлы в контенте (исключая облачные)
+            # Ищем ссылки на файлы в контенте (фильтрация уже в find_media_links_in_content)
             if content:
+                print(f"  🔍 Анализируем HTML контент поста ({len(content)} символов)...")
                 content_links = find_media_links_in_content(content)
                 if content_links:
-                    # Фильтруем облачные ссылки, чтобы не скачивать их как файлы
-                    cloud_domains = ['drive.google.com', 'mega.nz', 'mega.co.nz', 'dropbox.com', 
-                                   'onedrive.live.com', '1drv.ms', 'mediafire.com', 'we.tl', 
-                                   'wetransfer.com', 'pcloud.com', 'disk.yandex.', 'box.com', 'icloud.com']
-                    
-                    filtered_links = []
+                    print(f"  ✅ Найдено ссылок в контенте: {len(content_links)}")
+                    # НЕ дублируем фильтрацию - она уже в find_media_links_in_content
                     for link in content_links:
-                        is_cloud = any(domain in link.lower() for domain in cloud_domains)
-                        if not is_cloud and link not in media_links:
-                            filtered_links.append(link)
-                    
-                    if filtered_links:
-                        print(f"  🔗 Enhanced: найдено файловых ссылок в контенте: {len(filtered_links)}")
-                        for link in filtered_links:
+                        if link not in media_links:  # Просто избегаем дубликатов
                             media_links.append(link)
                             filename = link.split('/')[-1].split('?')[0][:50]
-                            print(f"      🔗 Контент ссылка: {filename}...")
+                            print(f"      ✅ Добавлена ссылка: {filename}...")
+                else:
+                    print(f"  ⚠️ В HTML контенте файлов не найдено")
             
         # 6. Проверка всех секций на видео файлы
         all_video_sources = []
@@ -986,23 +979,27 @@ def extract_creator_info(url):
     return None, None
 
 def find_media_links_in_content(content):
-    """Находит ссылки на медиа файлы в тексте контента"""
+    """Находит ссылки на медиа файлы в тексте контента (ИСПРАВЛЕНО: убрана избыточная фильтрация)"""
     media_links = []
     
-    # 1. Парсим HTML теги <a href="..."> и <figure>
+    # 1. Парсим HTML теги <a href="..."> и <figure> (РАСШИРЕННЫЕ паттерны для kemono)
     html_patterns = [
         # fileThumb image-link href="..."
         r'<a[^>]*class="[^"]*fileThumb[^"]*image-link[^"]*"[^>]*href="([^"]+)"',
         # Любые img src="..." с kemono доменами
         r'<img[^>]*src="([^"]*(?:kemono\.cr|kemono\.party)[^"]*)"',
-        # Относительные ссылки img src="/..." (kemono файлы)
-        r'<img[^>]*src="(/[^"]*\.(?:png|jpg|jpeg|gif|webp|svg|mp4|avi|mkv|mov|webm)[^"]*)"',
-        # Любые a href="..." с медиа файлами
-        r'<a[^>]*href="([^"]*(?:\.mp4|\.avi|\.mkv|\.mov|\.webm|\.zip|\.rar|\.jpg|\.png|\.gif|\.jpeg)[^"]*)"',
+        # Относительные ссылки img src="/..." (kemono файлы) - РАСШИРЕННЫЙ паттерн
+        r'<img[^>]*src="(/[^"]*\.(?:png|jpg|jpeg|gif|webp|svg|bmp|tiff|tga|psd|mp4|avi|mkv|mov|webm)[^"]*)"',
+        # Любые a href="..." с медиа файлами - РАСШИРЕННЫЙ паттерн
+        r'<a[^>]*href="([^"]*(?:\.mp4|\.avi|\.mkv|\.mov|\.webm|\.zip|\.rar|\.7z|\.jpg|\.png|\.gif|\.jpeg|\.webp|\.bmp)[^"]*)"',
         # Любые ссылки на data/ папки kemono
         r'<[^>]*(?:href|src)="([^"]*(?:kemono\.cr|kemono\.party)[^"]*/data/[^"]*)"',
-        # Относительные ссылки на data/ папки
+        # Относительные ссылки на data/ папки - БОЛЕЕ ШИРОКИЙ паттерн
         r'<[^>]*(?:href|src)="(/data/[^"]*)"',
+        # НОВЫЙ: Относительные ссылки на любые kemono папки
+        r'<[^>]*(?:href|src)="(/[0-9a-f]{2}/[0-9a-f]{2}/[^"]*\.(?:png|jpg|jpeg|gif|webp|svg|bmp|mp4|avi|mkv|mov)[^"]*)"',
+        # НОВЫЙ: Любые kemono CDN ссылки (n1, n2, n3, n4, n5, n6...)
+        r'<[^>]*(?:href|src)="(https://n[0-9]+\.kemono\.cr/[^"]*)"',
     ]
     
     for pattern in html_patterns:
@@ -1017,24 +1014,28 @@ def find_media_links_in_content(content):
             elif match.startswith('//'):
                 match = 'https:' + match
             
-            # Проверяем, что это НЕ облачная ссылка
+            # БОЛЕЕ ТОЧНАЯ фильтрация: проверяем только НАСТОЯЩИЕ облачные домены
+            # НЕ включаем kemono.cr в фильтрацию!
             cloud_domains = ['drive.google.com', 'mega.nz', 'mega.co.nz', 'dropbox.com', 
                             'onedrive.live.com', '1drv.ms', 'mediafire.com', 'we.tl', 
                             'wetransfer.com', 'pcloud.com', 'disk.yandex.', 'box.com', 
                             'icloud.com', 'patreon.com/media-u']
             
-            # Фильтруем облачные ссылки
+            # Фильтруем ТОЛЬКО настоящие облачные ссылки
             is_cloud = any(domain in match.lower() for domain in cloud_domains)
             
-            if not is_cloud and match not in media_links:
+            # ВСЕГДА разрешаем kemono.cr ссылки
+            is_kemono = 'kemono.cr' in match.lower() or 'kemono.party' in match.lower()
+            
+            if (not is_cloud or is_kemono) and match not in media_links:
                 media_links.append(match)
                 print(f"      📸 HTML тег: {match.split('/')[-1][:50]}...")
     
     # 2. Паттерны для поиска файлов в тексте (ИСКЛЮЧАЯ облачные хранилища)
-    # Определяем облачные домены для фильтрации
-    cloud_domains = ['drive.google.com', 'mega.nz', 'mega.co.nz', 'dropbox.com', 
-                    'onedrive.live.com', '1drv.ms', 'mediafire.com', 'we.tl', 
-                    'wetransfer.com', 'pcloud.com', 'disk.yandex.', 'box.com', 'icloud.com']
+    # Более строгая фильтрация облачных доменов (БЕЗ kemono.cr!)
+    strict_cloud_domains = ['drive.google.com', 'mega.nz', 'mega.co.nz', 'dropbox.com', 
+                           'onedrive.live.com', '1drv.ms', 'mediafire.com', 'we.tl', 
+                           'wetransfer.com', 'pcloud.com', 'disk.yandex.', 'box.com', 'icloud.com']
     
     url_patterns = [
         # Все поддерживаемые расширения
@@ -1047,8 +1048,10 @@ def find_media_links_in_content(content):
         r'https?://[^\s<>"]+\.(?:unity|unitypackage|prefab|asset)',  # Unity
         r'https?://[^\s<>"]+\.(?:dds|hdr|exr|mat)',  # Текстуры
         r'https?://[^\s<>"]+\.(?:exe|msi|dmg|apk|ipa)',  # Приложения
-        # Kemono данные (ТОЛЬКО kemono, без облачных хранилищ)
+        # Kemono данные (ВСЕГДА включаем kemono.cr ссылки)
         r'https?://[^\s<>"]*(?:kemono\.cr|kemono\.party)[^\s<>"]*/data/[^\s<>"]*',
+        # НОВЫЙ: n1.kemono.cr, n2.kemono.cr и т.д.
+        r'https?://n[0-9]+\.kemono\.cr/[^\s<>"]*',
     ]
     
     for pattern in url_patterns:
@@ -1057,13 +1060,16 @@ def find_media_links_in_content(content):
             # Очищаем от лишних символов в конце
             match = match.rstrip('.,;:)')
             
-            # ВАЖНО: Проверяем, что это НЕ облачная ссылка
-            is_cloud = any(domain in match.lower() for domain in cloud_domains)
+            # ВАЖНО: Проверяем, что это НЕ облачная ссылка, НО разрешаем kemono.cr
+            is_cloud = any(domain in match.lower() for domain in strict_cloud_domains)
+            is_kemono = 'kemono.cr' in match.lower() or 'kemono.party' in match.lower()
             
-            if not is_cloud and match not in media_links:
+            # Включаем ссылку если это НЕ облако ИЛИ это kemono
+            if (not is_cloud or is_kemono) and match not in media_links:
                 media_links.append(match)
                 print(f"      🔗 Текст ссылка: {match.split('/')[-1][:50]}...")
     
+    print(f"  🔍 find_media_links_in_content: найдено {len(media_links)} ссылок (включая kemono)")
     return media_links
 
 def get_post_media_from_html_fallback(post_url):
@@ -1326,7 +1332,7 @@ def show_download_status(save_dir):
 
 def console_interface():
     """Консольный интерфейс для программы"""
-    print("🦊 KemonoDownloader v2.8.1 Multithread - Console Edition")
+    print("🦊 KemonoDownloader v2.8.2 Multithread - Console Edition")
     print("="*65)
     print("🎯 УНИВЕРСАЛЬНЫЙ ПОИСК ВСЕХ ФАЙЛОВ:")
     print("🎭 3D модели: GLB, GLTF, BLEND, FBX, OBJ, DAE, 3DS, MAX")
