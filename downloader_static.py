@@ -733,6 +733,10 @@ def download_files_parallel(media_links, save_dir, progress_data=None, max_worke
     success_count = 0
     total_count = len(media_links)
     completed_files = 0
+    
+    # ИСПРАВЛЕНО: Инициализируем общий прогресс в начале
+    if overall_callback:
+        overall_callback(0, total_count)
     lock = threading.Lock()
     
     def download_with_progress(args):
@@ -756,9 +760,17 @@ def download_files_parallel(media_links, save_dir, progress_data=None, max_worke
             
         print(f"🔄 Поток-{thread_id}: Начинаем {filename[:40]}...")
         
+        # Обновляем прогресс потока - начинаем скачивание
+        if thread_callback:
+            thread_callback(thread_id, filename, 10, 100)  # Показываем что начали
+        
         # Проверяем еще раз перед скачиванием
         if stop_check and stop_check():
             return False
+        
+        # Обновляем прогресс потока - скачиваем
+        if thread_callback:
+            thread_callback(thread_id, filename, 50, 100)  # Показываем процесс
             
         result = download_file(url, save_dir, progress_data)
         

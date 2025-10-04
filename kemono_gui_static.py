@@ -1221,6 +1221,21 @@ class KemonoDownloaderGUI(QMainWindow):
         self.statusBar().showMessage("Скачивание...")
         self.log_text.clear()
         
+        # ИСПРАВЛЕНО: Сбрасываем все прогресс-бары при старте
+        self.post_progress.setValue(0)
+        self.post_progress.setMaximum(1)
+        self.post_progress_label.setText("Посты: 0/0")
+        
+        self.overall_progress.setValue(0)
+        self.overall_progress.setMaximum(1)
+        self.overall_progress_label.setText("Файлы: 0/0")
+        
+        # Сбрасываем прогресс-бары потоков
+        for i, progress_bar in enumerate(self.thread_progress_bars):
+            progress_bar.setValue(0)
+            progress_bar.setMaximum(100)
+            progress_bar.setToolTip("")
+        
     def stop_download(self):
         if self.worker:
             self.worker.stop()
