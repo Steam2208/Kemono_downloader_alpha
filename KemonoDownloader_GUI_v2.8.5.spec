@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='KemonoDownloader_GUI_v2.8.2_Progress',
+    name='KemonoDownloader_GUI_v2.8.5',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
