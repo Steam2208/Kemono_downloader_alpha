@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🦊 KemonoDownloader v2.8.2 Progress - Multi-threaded File Downloader
+🦊 KemonoDownloader v2.8.5 Progress - Multi-threaded File Downloader
 Новое в v2.7 Progress:
 - 📊 Визуализация прогресса каждого потока в реальном времени
 - 🚄 Прогресс-бары для всех 5 потоков скачивания  
@@ -257,8 +257,8 @@ class DownloaderWorker(QThread):
                 
                 self.log.emit(f"✅ Массовое скачивание завершено: {downloaded_count} файлов")
                 
-                # НОВОЕ: Скачиваем облачные файлы после обычных
-                if self.running:
+                # НОВОЕ: Скачиваем облачные файлы после обычных (если включено)
+                if self.running and self.settings.get('download_cloud', True):
                     self.log.emit("🌐 Шаг 3: Проверяем облачные файлы...")
                     cloud_links_file = os.path.join(save_dir, "cloud_links.txt")
                     if os.path.exists(cloud_links_file):
@@ -287,6 +287,10 @@ class DownloaderWorker(QThread):
                                 self.log.emit("ℹ️ Облачных ссылок не найдено")
                         except Exception as e:
                             self.log.emit(f"⚠️ Ошибка обработки облачных файлов: {e}")
+                    else:
+                        self.log.emit("ℹ️ Файл cloud_links.txt не найден")
+                elif self.running:
+                    self.log.emit("⚙️ Скачивание облачных файлов отключено в настройках")
             
             if self.running:
                 self.log.emit(f"\n🎉 ЗАВЕРШЕНО! Скачано {total_downloaded} файлов")
@@ -309,8 +313,8 @@ class KemonoDownloaderGUI(QMainWindow):
         self.load_settings()
         
     def init_ui(self):
-        self.setWindowTitle("KemonoDownloader v2.8.2")
-        self.setGeometry(100, 100, 700, 580)
+        self.setWindowTitle("KemonoDownloader v2.8.5")
+        self.setGeometry(100, 100, 700, 600)  # Увеличиваем высоту на 20px для нового чекбокса
         
         # Центральный виджет
         central_widget = QWidget()
@@ -384,6 +388,14 @@ class KemonoDownloaderGUI(QMainWindow):
         self.dark_theme_checkbox.setChecked(True)
         self.dark_theme_checkbox.stateChanged.connect(self.toggle_theme)
         settings_layout.addWidget(self.dark_theme_checkbox, 3, 1)
+        
+        # Скачивание облачных файлов
+        settings_layout.addWidget(QLabel("Облако:"), 4, 0)
+        self.download_cloud_checkbox = QCheckBox("Скачивать")
+        self.download_cloud_checkbox.setChecked(True)  # По умолчанию включено
+        self.download_cloud_checkbox.setToolTip("Скачивать файлы из облачных сервисов (Dropbox, Google Drive, MEGA)")
+        self.download_cloud_checkbox.stateChanged.connect(self.save_settings)
+        settings_layout.addWidget(self.download_cloud_checkbox, 4, 1)
         
         layout.addWidget(settings_group)
         
@@ -556,12 +568,17 @@ class KemonoDownloaderGUI(QMainWindow):
         self.dark_theme_checkbox.setChecked(dark_theme)
         self.apply_theme(dark_theme)
         
+        # Загружаем настройку скачивания облачных файлов
+        download_cloud = self.settings.value("download_cloud", True, type=bool)
+        self.download_cloud_checkbox.setChecked(download_cloud)
+        
     def save_settings(self):
         """Сохраняет текущие настройки"""
         self.settings.setValue("download_dir", self.download_dir_input.text())
         self.settings.setValue("post_limit", self.post_limit_input.value())
         self.settings.setValue("threads_count", self.threads_count_input.value())
         self.settings.setValue("dark_theme", self.dark_theme_checkbox.isChecked())
+        self.settings.setValue("download_cloud", self.download_cloud_checkbox.isChecked())
     
     def closeEvent(self, event):
         """Обрабатывает закрытие окна"""
@@ -1202,7 +1219,8 @@ class KemonoDownloaderGUI(QMainWindow):
         settings = {
             'download_dir': download_dir,
             'post_limit': self.post_limit_input.value() if self.post_limit_input.value() > 0 else None,
-            'threads_count': self.threads_count_input.value()
+            'threads_count': self.threads_count_input.value(),
+            'download_cloud': self.download_cloud_checkbox.isChecked()
         }
         
         # Запускаем рабочий поток
@@ -1326,7 +1344,7 @@ class KemonoDownloaderGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("KemonoDownloader GUI v2.8.2 Progress")
+    app.setApplicationName("KemonoDownloader GUI v2.8.5 Progress")
     
     # Создаем окно (тема будет применена в load_settings)
     window = KemonoDownloaderGUI()
