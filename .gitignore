@@ -12,12 +12,16 @@ pip-del-this-directory.txt
 
 # PyInstaller
 build/
-*.spec
+dist/
 
 # Downloads and temp files
 downloads/
 *.kemono_progress.json
 cloud_links.txt
+
+# Test files
+test_*
+demo_*.py
 
 # IDE
 .vscode/
