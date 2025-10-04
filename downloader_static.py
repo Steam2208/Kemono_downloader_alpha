@@ -645,12 +645,12 @@ def get_post_media(post_url, enhanced_search=True, save_dir=None):
             else:
                 print(f"   ❌ Файлы не найдены")
             
-        # Сохраняем облачные ссылки если найдены
-        # Обрабатываем облачные ссылки и добавляем их к медиа файлам
+        # ИСПРАВЛЕНО: только сохраняем облачные ссылки, но НЕ скачиваем их сразу
+        # Скачивание будет происходить отдельно в основном цикле
         if 'cloud_links' in locals() and cloud_links and CLOUD_AUTO_ENABLED:
             try:
                 print(f"  ☁️ Найдено облачных ссылок: {len(cloud_links)}")
-                # Скачиваем облачные файлы в указанную папку
+                # Только сохраняем ссылки для истории, но НЕ скачиваем сейчас
                 if save_dir:
                     downloads_dir = save_dir
                 else:
@@ -658,22 +658,7 @@ def get_post_media(post_url, enhanced_search=True, save_dir=None):
                     
                 # Сохраняем ссылки для истории
                 save_cloud_links(downloads_dir, cloud_links, post_url)
-                
-                # Скачиваем облачные файлы
-                downloader = CloudDownloader()
-                for i, link_info in enumerate(cloud_links, 1):
-                    service = link_info['service']
-                    url = link_info['url']
-                    print(f"    [{i}/{len(cloud_links)}] {service}: {url[:60]}...")
-                    
-                    try:
-                        success = downloader.download_from_cloud(url, downloads_dir)
-                        if success:
-                            print(f"    ✅ {service} файл скачан")
-                        else:
-                            print(f"    ❌ Не удалось скачать {service} файл")
-                    except Exception as e:
-                        print(f"    ❌ Ошибка скачивания {service}: {e}")
+                print(f"    💾 Облачных ссылок сохранено: {len(cloud_links)} в cloud_links.txt")
                         
             except Exception as e:
                 print(f"  ⚠️ Ошибка обработки облачных ссылок: {e}")

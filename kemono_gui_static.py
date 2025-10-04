@@ -256,6 +256,37 @@ class DownloaderWorker(QThread):
                 save_download_progress(save_dir, progress_data)
                 
                 self.log.emit(f"✅ Массовое скачивание завершено: {downloaded_count} файлов")
+                
+                # НОВОЕ: Скачиваем облачные файлы после обычных
+                if self.running:
+                    self.log.emit("🌐 Шаг 3: Проверяем облачные файлы...")
+                    cloud_links_file = os.path.join(save_dir, "cloud_links.txt")
+                    if os.path.exists(cloud_links_file):
+                        try:
+                            # Читаем облачные ссылки из файла
+                            with open(cloud_links_file, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                            
+                            # Парсим облачные ссылки
+                            from downloader_static import detect_cloud_links
+                            cloud_links = detect_cloud_links(content)
+                            
+                            if cloud_links:
+                                self.log.emit(f"☁️ Найдено {len(cloud_links)} облачных ссылок для скачивания")
+                                
+                                # Скачиваем облачные файлы
+                                from downloader_static import download_cloud_files
+                                cloud_downloaded = download_cloud_files(save_dir, cloud_links, "batch_download")
+                                
+                                if cloud_downloaded:
+                                    self.log.emit(f"✅ Облачных файлов скачано: {len(cloud_downloaded)}")
+                                    total_downloaded += len(cloud_downloaded)
+                                else:
+                                    self.log.emit("⚠️ Облачные файлы не скачались")
+                            else:
+                                self.log.emit("ℹ️ Облачных ссылок не найдено")
+                        except Exception as e:
+                            self.log.emit(f"⚠️ Ошибка обработки облачных файлов: {e}")
             
             if self.running:
                 self.log.emit(f"\n🎉 ЗАВЕРШЕНО! Скачано {total_downloaded} файлов")
@@ -1234,8 +1265,14 @@ class KemonoDownloaderGUI(QMainWindow):
             self.overall_progress.setValue(total)  # Убеждаемся что показывает 100%
 
     def add_log(self, message):
-        # Показываем только ошибки и важные сообщения
-        if any(keyword in message.lower() for keyword in ['ошибка', 'error', '❌', '✅ завершено', '🎯', '📋']):
+        # Показываем ошибки, важные сообщения, прогресс анализа постов и прогресс скачивания
+        show_keywords = [
+            'ошибка', 'error', '❌', '✅ завершено', '✅', '🎯', '📋', '🎉',
+            '📄', 'анализируем пост', 'analyzing post',
+            '📥', '⬇️', 'скачано файлов', 'уже скачано файлов', 'files downloaded', 'завершено',
+            '🚀', 'начинаем скачивание', 'начинаем', 'шаг 1', 'шаг 2', '🔍'
+        ]
+        if any(keyword in message.lower() for keyword in show_keywords):
             self.log_text.append(message)
             # Автоскролл вниз
             scrollbar = self.log_text.verticalScrollBar()
