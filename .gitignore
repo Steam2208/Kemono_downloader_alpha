@@ -1,0 +1,38 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-del-this-directory.txt
+
+# PyInstaller
+build/
+# Не исключаем dist/ - там финальный exe файл
+
+# Downloads and temp files
+downloads/
+*.kemono_progress.json
+cloud_links.txt
+
+# Test files
+test_*
+demo_*.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Logs
+*.log
